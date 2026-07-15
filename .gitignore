@@ -1,0 +1,33 @@
+# Build/release artifacts
+release/*
+!release/.gitkeep
+*.nupkg
+*.zip
+
+# Logs/state/config containing secrets
+*.log
+*.ndjson
+upload-state.json
+uploader-config.json
+
+# Secrets
+*.secret
+*.secrets
+*.key
+*.pfx
+*.cer
+*.pem
+.env
+
+# Test output
+test-output/
+coverage/
+TestResults/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
