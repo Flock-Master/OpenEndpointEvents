@@ -149,15 +149,25 @@ Invoke-Test -Name "Import module" -ScriptBlock {
     Remove-Module OpenEndpointEvents -Force -ErrorAction SilentlyContinue
 
     if (-not [string]::IsNullOrWhiteSpace($ModulePath)) {
-        Assert-True -Condition (Test-Path -Path $ModulePath) -Message "ModulePath not found: $ModulePath"
-        Import-Module $ModulePath -Force
+        $resolvedModulePath = Resolve-Path -Path $ModulePath -ErrorAction Stop
+        Import-Module $resolvedModulePath.Path -Force
     }
     else {
-        Import-Module OpenEndpointEvents -Force
+        $repoRoot = Split-Path -Path $PSScriptRoot -Parent
+        $repoModulePath = Join-Path $repoRoot "src\OpenEndpointEvents\OpenEndpointEvents.psd1"
+
+        if (Test-Path -Path $repoModulePath) {
+            Import-Module $repoModulePath -Force
+        }
+        else {
+            Import-Module OpenEndpointEvents -Force
+        }
     }
 
     $module = Get-Module OpenEndpointEvents
     Assert-True -Condition ($null -ne $module) -Message "OpenEndpointEvents module was not imported."
+
+    Write-Host "Imported module from: $($module.Path)" -ForegroundColor Cyan
 }
 
 Invoke-Test -Name "Exported commands exist" -ScriptBlock {
