@@ -11,6 +11,8 @@ upload-state.json
 uploader-config.json
 
 # Secrets
+uploader-config.json
+config-refresh.json
 *.secret
 *.secrets
 *.key

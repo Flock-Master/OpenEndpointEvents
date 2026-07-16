@@ -1,6 +1,6 @@
 @{
     RootModule        = 'OpenEndpointEvents.psm1'
-    ModuleVersion     = '1.0.0'
+    ModuleVersion     = '1.0.1'
     GUID              = '7f98bb9c-3c6a-4b65-9871-7e8e7f0a9d41'
     Author            = 'OpenEndpointEvents contributors'
     CompanyName       = 'OpenEndpointEvents'
@@ -8,6 +8,7 @@
     Description       = 'Lightweight PowerShell module for writing user-defined endpoint events as daily NDJSON files for simple analytics.'
     PowerShellVersion = '5.1'
     CompatiblePSEditions = @('Desktop', 'Core')
+    ReleaseNotes = 'Added uploader support scripts for Azure Blob upload and remote config refresh.'
 
     FunctionsToExport = @(
         'ConvertTo-SafeFilePart',
