@@ -8,7 +8,6 @@
     Description       = 'Lightweight PowerShell module for writing user-defined endpoint events as daily NDJSON files for simple analytics.'
     PowerShellVersion = '5.1'
     CompatiblePSEditions = @('Desktop', 'Core')
-    ReleaseNotes = 'Added uploader support scripts for Azure Blob upload and remote config refresh.'
 
     FunctionsToExport = @(
         'ConvertTo-SafeFilePart',
@@ -46,7 +45,7 @@
 
             ProjectUri   = 'https://github.com/Flock-Master/OpenEndpointEvents'
             LicenseUri   = 'https://github.com/Flock-Master/OpenEndpointEvents/blob/main/LICENSE'
-            ReleaseNotes = 'Initial OpenEndpointEvents release with endpoint event logging, daily NDJSON output, endpoint identity enrichment, structured data support, and comment-based help.'
+            ReleaseNotes = 'Initial OpenEndpointEvents release with endpoint event logging, daily NDJSON output, endpoint identity enrichment, structured data support, and comment-based help. Added uploader support scripts for Azure Blob upload and remote config refresh.'
         }
     }
 }
