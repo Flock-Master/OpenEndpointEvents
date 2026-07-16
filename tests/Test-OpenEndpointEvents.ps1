@@ -530,4 +530,19 @@ $failed = @($script:TestResults | Where-Object { $_.Status -eq "FAIL" })
 $passed = @($script:TestResults | Where-Object { $_.Status -eq "PASS" })
 
 Write-Host ""
-Write-Host "Passed: $($passed.Count)" -ForegroundColor Gr |
+Write-Host "Passed: $($passed.Count)" -ForegroundColor Green
+Write-Host "Failed: $($failed.Count)" -ForegroundColor $(if ($failed.Count -eq 0) { "Green" } else { "Red" })
+
+if ($KeepTestFiles) {
+    Write-Host "Test files kept at: $TestRoot" -ForegroundColor Yellow
+}
+else {
+    Remove-Item -Path $TestRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "Test files removed." -ForegroundColor Yellow
+}
+
+if ($failed.Count -gt 0) {
+    exit 1
+}
+
+exit 0
