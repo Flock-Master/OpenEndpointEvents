@@ -1,6 +1,6 @@
 @{
     RootModule        = 'OpenEndpointEvents.psm1'
-    ModuleVersion     = '1.0.1'
+    ModuleVersion     = '1.0.0'
     GUID              = '7f98bb9c-3c6a-4b65-9871-7e8e7f0a9d41'
     Author            = 'OpenEndpointEvents contributors'
     CompanyName       = 'OpenEndpointEvents'
