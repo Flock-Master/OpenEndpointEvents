@@ -13,6 +13,7 @@
     - State updated only after confirmed upload
     - Upload failures logged locally using OpenEndpointEvents
     - Supports manual immediate upload with -Now
+    - Supports script-side upload interval gating using MinimumUploadIntervalMinutes
 
 .PARAMETER ConfigPath
     Local uploader config file path.
@@ -20,8 +21,11 @@
 .PARAMETER Window
     File selection window. AllChanged is recommended for catch-up.
 
+.PARAMETER Since
+    Date used when Window is SinceDate.
+
 .PARAMETER Now
-    Runs upload immediately. Used for manual triggering.
+    Runs upload immediately and bypasses MinimumUploadIntervalMinutes.
 
 .PARAMETER ForceUpload
     Uploads eligible files even if state indicates no change.
@@ -39,7 +43,6 @@
     .\Upload-EndpointEvents.ps1 -ConfigPath "C:\ProgramData\OpenEndpointEvents\Config\uploader-config.json"
 #>
 
-[CmdletBinding()]
 param(
     [string]$ConfigPath = "C:\ProgramData\OpenEndpointEvents\Config\uploader-config.json",
 
@@ -118,26 +121,20 @@ function Write-UploaderError {
     }
 }
 
-function ConvertTo-BlobSafePath {
-    [CmdletBinding()]
+function ConvertTo-BlobPathSafePart {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$BlobPath
+        [string]$Value
     )
 
-    $segments = $BlobPath -split "/"
-
-    $encodedSegments = foreach ($segment in $segments) {
-        [System.Uri]::EscapeDataString($segment)
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return "Unknown"
     }
 
-    return ($encodedSegments -join "/")
+    return ($Value -replace '[^a-zA-Z0-9\-_\.]', '_')
 }
 
 function Get-FileContentMD5Base64 {
-    [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
         [string]$Path
     )
 
@@ -160,13 +157,9 @@ function Get-FileContentMD5Base64 {
 }
 
 function Invoke-WithRetry {
-    [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
         [scriptblock]$ScriptBlock,
-
         [int]$RetryCount = 3,
-
         [int]$RetryDelaySeconds = 5
     )
 
@@ -189,17 +182,10 @@ function Invoke-WithRetry {
 }
 
 function Invoke-ConfirmedBlobUpload {
-    [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
         [string]$FilePath,
-
-        [Parameter(Mandatory = $true)]
         [string]$ContainerSasUrl,
-
-        [Parameter(Mandatory = $true)]
         [string]$BlobPath,
-
         [string]$ContentType = "application/x-ndjson"
     )
 
@@ -257,12 +243,8 @@ function Invoke-ConfirmedBlobUpload {
 }
 
 function New-UploadSnapshot {
-    [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
         [System.IO.FileInfo]$File,
-
-        [Parameter(Mandatory = $true)]
         [string]$SnapshotRoot
     )
 
@@ -348,6 +330,7 @@ function Get-ComputerNameFromFileName {
 
     try {
         $parts = $File.BaseName -split "-"
+
         if ($parts.Count -ge 3) {
             return $parts[2]
         }
@@ -357,28 +340,110 @@ function Get-ComputerNameFromFileName {
     return $env:COMPUTERNAME
 }
 
+function Get-EndpointIdentitySafe {
+    $identity = $null
+
+    try {
+        Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+
+        if (Get-Command Get-EndpointIdentity -ErrorAction SilentlyContinue) {
+            $identity = Get-EndpointIdentity
+        }
+    }
+    catch {}
+
+    if ($null -eq $identity) {
+        $identity = [pscustomobject]@{
+            ComputerName = $env:COMPUTERNAME
+            SerialNumber = "UnknownSerial"
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($identity.ComputerName)) {
+        $identity.ComputerName = $env:COMPUTERNAME
+    }
+
+    if ([string]::IsNullOrWhiteSpace($identity.SerialNumber)) {
+        $identity.SerialNumber = "UnknownSerial"
+    }
+
+    return $identity
+}
+
 function Get-BlobPath {
     param(
         [System.IO.FileInfo]$File,
-        [string]$BlobPrefix
+        [string]$BlobPrefix,
+        [object[]]$BlobStoreGroupBy
     )
 
-    $date = $File.LastWriteTimeUtc
-
-    $yyyy = $date.ToString("yyyy")
-    $mm = $date.ToString("MM")
-    $dd = $date.ToString("dd")
-
-    $computerName = Get-ComputerNameFromFileName -File $File
-
-    $safeComputerName = ($computerName -replace '[^a-zA-Z0-9\-_]', '_')
-    $safeFileName = ($File.Name -replace '[^a-zA-Z0-9\-_\.]', '_')
+    if ($null -eq $BlobStoreGroupBy -or $BlobStoreGroupBy.Count -eq 0) {
+        $BlobStoreGroupBy = @("Date")
+    }
 
     $prefix = $BlobPrefix.Trim("/")
+    $safeFileName = ConvertTo-BlobPathSafePart -Value $File.Name
+    $pathParts = New-Object System.Collections.Generic.List[string]
 
-    return "$prefix/$yyyy/$mm/$dd/$safeComputerName/$safeFileName"
+    if (-not [string]::IsNullOrWhiteSpace($prefix)) {
+        $pathParts.Add($prefix)
+    }
+
+    $date = $File.LastWriteTimeUtc
+    $identity = $null
+
+    foreach ($group in $BlobStoreGroupBy) {
+        $groupValue = [string]$group
+
+        switch -Regex ($groupValue) {
+            "^(Flat)$" {
+                # No grouping folders.
+            }
+
+            "^(Date)$" {
+                $pathParts.Add($date.ToString("yyyy"))
+                $pathParts.Add($date.ToString("MM"))
+                $pathParts.Add($date.ToString("dd"))
+            }
+
+            "^(Year)$" {
+                $pathParts.Add($date.ToString("yyyy"))
+            }
+
+            "^(Month)$" {
+                $pathParts.Add($date.ToString("MM"))
+            }
+
+            "^(Day)$" {
+                $pathParts.Add($date.ToString("dd"))
+            }
+
+            "^(ComputerName)$" {
+                if ($null -eq $identity) {
+                    $identity = Get-EndpointIdentitySafe
+                }
+
+                $pathParts.Add((ConvertTo-BlobPathSafePart -Value $identity.ComputerName))
+            }
+
+            "^(SerialNumber)$" {
+                if ($null -eq $identity) {
+                    $identity = Get-EndpointIdentitySafe
+                }
+
+                $pathParts.Add((ConvertTo-BlobPathSafePart -Value $identity.SerialNumber))
+            }
+
+            default {
+                throw "Unsupported BlobStoreGroupBy value: $groupValue"
+            }
+        }
+    }
+
+    $pathParts.Add($safeFileName)
+
+    return ($pathParts -join "/")
 }
-
 function Test-FileChanged {
     param(
         [System.IO.FileInfo]$File,
@@ -402,6 +467,69 @@ function Test-FileChanged {
     return $false
 }
 
+function Test-UploadDue {
+    param(
+        [string]$RunStatePath,
+        [int]$MinimumUploadIntervalMinutes,
+        [switch]$Now
+    )
+
+    if ($Now) {
+        return $true
+    }
+
+    if (-not (Test-Path -Path $RunStatePath)) {
+        return $true
+    }
+
+    $runState = Get-Content -Path $RunStatePath -Raw | ConvertFrom-Json
+
+    if (-not $runState.LastRunUtc) {
+        return $true
+    }
+
+    $lastRunUtc = [datetime]$runState.LastRunUtc
+    $nextRunUtc = $lastRunUtc.ToUniversalTime().AddMinutes($MinimumUploadIntervalMinutes)
+
+    if ((Get-Date).ToUniversalTime() -lt $nextRunUtc) {
+        Write-UploaderInfo `
+            -EventName "UploadSkipped" `
+            -Message "OpenEndpointEvents upload skipped due to minimum upload interval" `
+            -Data @{
+                LastRunUtc                    = $lastRunUtc.ToUniversalTime().ToString("o")
+                NextRunUtc                    = $nextRunUtc.ToString("o")
+                MinimumUploadIntervalMinutes  = $MinimumUploadIntervalMinutes
+                Status                        = "Skipped"
+            }
+
+        return $false
+    }
+
+    return $true
+}
+
+function Save-UploadRunState {
+    param(
+        [string]$RunStatePath,
+        [int]$MinimumUploadIntervalMinutes,
+        [string]$Status
+    )
+
+    $stateRoot = Split-Path -Path $RunStatePath -Parent
+
+    if (-not (Test-Path -Path $stateRoot)) {
+        New-Item -Path $stateRoot -ItemType Directory -Force | Out-Null
+    }
+
+    [ordered]@{
+        LastRunUtc                    = (Get-Date).ToUniversalTime().ToString("o")
+        MinimumUploadIntervalMinutes  = $MinimumUploadIntervalMinutes
+        Status                        = $Status
+    } |
+        ConvertTo-Json -Depth 10 |
+        Set-Content -Path $RunStatePath -Encoding UTF8
+}
+
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -416,6 +544,11 @@ try {
     $ContainerSasUrl = [string]$config.ContainerSasUrl
     $BlobPrefix = [string]$config.BlobPrefix
     $BlobWriteMode = [string]$config.BlobWriteMode
+    $BlobStoreGroupBy = @("Date")
+
+    if ($config.BlobStoreGroupBy) {
+        $BlobStoreGroupBy = @($config.BlobStoreGroupBy)
+    }
 
     if ([string]::IsNullOrWhiteSpace($Window)) {
         $Window = if ($config.DefaultWindow) { [string]$config.DefaultWindow } else { "AllChanged" }
@@ -432,6 +565,7 @@ try {
     $MaxFilesPerRun = if ($config.MaxFilesPerRun -ne $null) { [int]$config.MaxFilesPerRun } else { 100 }
     $RetryCount = if ($config.RetryCount -ne $null) { [int]$config.RetryCount } else { 3 }
     $RetryDelaySeconds = if ($config.RetryDelaySeconds -ne $null) { [int]$config.RetryDelaySeconds } else { 5 }
+    $MinimumUploadIntervalMinutes = if ($config.MinimumUploadIntervalMinutes -ne $null) { [int]$config.MinimumUploadIntervalMinutes } else { 60 }
 
     if ([string]::IsNullOrWhiteSpace($LogRoot)) {
         throw "LogRoot missing from uploader config."
@@ -457,6 +591,18 @@ try {
         throw "Only BlobWriteMode 'OverwriteDailyFile' is supported in v1."
     }
 
+    if (-not (Test-Path -Path $StateRoot)) {
+        New-Item -Path $StateRoot -ItemType Directory -Force | Out-Null
+    }
+
+    $StatePath = Join-Path $StateRoot "upload-state.json"
+    $RunStatePath = Join-Path $StateRoot "upload-run-state.json"
+    $SnapshotRoot = Join-Path $StateRoot "Snapshots"
+
+    if (-not (Test-UploadDue -RunStatePath $RunStatePath -MinimumUploadIntervalMinutes $MinimumUploadIntervalMinutes -Now:$Now)) {
+        exit 0
+    }
+
     if (-not (Test-Path -Path $LogRoot)) {
         Write-UploaderWarn `
             -EventName "LogRootMissing" `
@@ -466,15 +612,9 @@ try {
                 Status  = "Skipped"
             }
 
+        Save-UploadRunState -RunStatePath $RunStatePath -MinimumUploadIntervalMinutes $MinimumUploadIntervalMinutes -Status "SkippedLogRootMissing"
         exit 0
     }
-
-    if (-not (Test-Path -Path $StateRoot)) {
-        New-Item -Path $StateRoot -ItemType Directory -Force | Out-Null
-    }
-
-    $StatePath = Join-Path $StateRoot "upload-state.json"
-    $SnapshotRoot = Join-Path $StateRoot "Snapshots"
 
     $state = Get-StateObject -StatePath $StatePath
 
@@ -482,11 +622,13 @@ try {
         -EventName "UploadStarted" `
         -Message "OpenEndpointEvents upload started" `
         -Data @{
-            ConfigPath = $ConfigPath
-            LogRoot    = $LogRoot
-            Window     = $Window
-            Now        = [bool]$Now
-            Status     = "Started"
+            ConfigPath                    = $ConfigPath
+            LogRoot                       = $LogRoot
+            Window                        = $Window
+            Now                           = [bool]$Now
+            BlobStoreGroupBy              = ($BlobStoreGroupBy -join ",")
+            MinimumUploadIntervalMinutes  = $MinimumUploadIntervalMinutes
+            Status                        = "Started"
         }
 
     $files = Get-ChildItem -Path $LogRoot -Filter "*.ndjson" -File -ErrorAction SilentlyContinue
@@ -535,7 +677,10 @@ try {
             continue
         }
 
-        $blobPath = Get-BlobPath -File $file -BlobPrefix $BlobPrefix
+        $blobPath = Get-BlobPath `
+            -File $file `
+            -BlobPrefix $BlobPrefix `
+            -BlobStoreGroupBy $BlobStoreGroupBy
 
         try {
             $snapshot = New-UploadSnapshot -File $file -SnapshotRoot $SnapshotRoot
@@ -608,6 +753,8 @@ try {
         }
     }
 
+    $finalStatus = if ($failedCount -gt 0) { "CompletedWithErrors" } else { "Success" }
+
     Write-UploaderInfo `
         -EventName "UploadFinished" `
         -Message "OpenEndpointEvents upload finished" `
@@ -615,8 +762,10 @@ try {
             UploadedCount = $uploadedCount
             SkippedCount  = $skippedCount
             FailedCount   = $failedCount
-            Status        = if ($failedCount -gt 0) { "CompletedWithErrors" } else { "Success" }
+            Status        = $finalStatus
         }
+
+    Save-UploadRunState -RunStatePath $RunStatePath -MinimumUploadIntervalMinutes $MinimumUploadIntervalMinutes -Status $finalStatus
 
     if ($failedCount -gt 0) {
         exit 1

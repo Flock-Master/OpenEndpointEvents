@@ -11,10 +11,15 @@
   "BlobPrefix": "open-endpoint-events",
   "DefaultWindow": "AllChanged",
   "BlobWriteMode": "OverwriteDailyFile",
+  "BlobStoreGroupBy": ["Date"]
+
   "MinimumFileAgeSeconds": 30,
+  "MinimumUploadIntervalMinutes": 60,
+
   "MaxFilesPerRun": 100,
   "RetryCount": 3,
   "RetryDelaySeconds": 5,
+
   "DeleteAfterUpload": false,
   "IncludeCurrentFile": true,
   "LocalRetentionDays": 30,

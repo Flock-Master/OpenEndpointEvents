@@ -1,5 +1,5 @@
 {
-  "ConfigUri": "https://storageaccount.blob.core.windows.net/open-endpoint-events-config/uploader-config.json?<read-only-config-sas>",
+  "ConfigUri": "https://storageaccount.blob.core.windows.net/uploader-config/uploader-config.json?<read-only-config-sas>",
   "LocalConfigPath": "C:\\ProgramData\\OpenEndpointEvents\\Config\\uploader-config.json",
   "StatePath": "C:\\ProgramData\\OpenEndpointEvents\\State\\config-refresh-state.json",
   "MinimumRefreshIntervalHours": 6,
