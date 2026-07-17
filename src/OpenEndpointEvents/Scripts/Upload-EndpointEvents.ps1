@@ -14,6 +14,7 @@
     - Upload failures logged locally using OpenEndpointEvents
     - Supports manual immediate upload with -Now
     - Supports script-side upload interval gating using MinimumUploadIntervalMinutes
+    - Supports configurable blob path grouping using BlobStoreGroupBy
 
 .PARAMETER ConfigPath
     Local uploader config file path.
@@ -40,6 +41,9 @@
     .\Upload-EndpointEvents.ps1 -Now -Window AllChanged
 
 .EXAMPLE
+    .\Upload-EndpointEvents.ps1 -Now -Window AllChanged -ForceUpload
+
+.EXAMPLE
     .\Upload-EndpointEvents.ps1 -ConfigPath "C:\ProgramData\OpenEndpointEvents\Config\uploader-config.json"
 #>
 
@@ -61,6 +65,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# ------------------------------------------------------------
+# Logging helpers
+# ------------------------------------------------------------
 
 function Write-UploaderInfo {
     param(
@@ -121,6 +129,10 @@ function Write-UploaderError {
     }
 }
 
+# ------------------------------------------------------------
+# Path / identity helpers
+# ------------------------------------------------------------
+
 function ConvertTo-BlobPathSafePart {
     param(
         [string]$Value
@@ -132,6 +144,129 @@ function ConvertTo-BlobPathSafePart {
 
     return ($Value -replace '[^a-zA-Z0-9\-_\.]', '_')
 }
+
+function ConvertTo-BlobSafePath {
+    param(
+        [string]$BlobPath
+    )
+
+    $segments = $BlobPath -split "/"
+
+    $encodedSegments = foreach ($segment in $segments) {
+        [System.Uri]::EscapeDataString($segment)
+    }
+
+    return ($encodedSegments -join "/")
+}
+
+function Get-EndpointIdentitySafe {
+    $identity = $null
+
+    try {
+        Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+
+        if (Get-Command Get-EndpointIdentity -ErrorAction SilentlyContinue) {
+            $identity = Get-EndpointIdentity
+        }
+    }
+    catch {}
+
+    if ($null -eq $identity) {
+        $identity = [pscustomobject]@{
+            ComputerName = $env:COMPUTERNAME
+            SerialNumber = "UnknownSerial"
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($identity.ComputerName)) {
+        $identity.ComputerName = $env:COMPUTERNAME
+    }
+
+    if ([string]::IsNullOrWhiteSpace($identity.SerialNumber)) {
+        $identity.SerialNumber = "UnknownSerial"
+    }
+
+    return $identity
+}
+
+function Get-BlobPath {
+    param(
+        [System.IO.FileInfo]$File,
+        [string]$BlobPrefix,
+        [object[]]$BlobStoreGroupBy
+    )
+
+    if ($null -eq $BlobStoreGroupBy -or $BlobStoreGroupBy.Count -eq 0) {
+        $BlobStoreGroupBy = @("Date")
+    }
+
+    $prefix = $BlobPrefix.Trim("/")
+    $safeFileName = ConvertTo-BlobPathSafePart -Value $File.Name
+    $pathParts = New-Object System.Collections.Generic.List[string]
+
+    if (-not [string]::IsNullOrWhiteSpace($prefix)) {
+        $pathParts.Add($prefix)
+    }
+
+    $date = $File.LastWriteTimeUtc
+    $identity = $null
+
+    foreach ($group in $BlobStoreGroupBy) {
+        $groupValue = [string]$group
+
+        switch -Regex ($groupValue) {
+            "^(Flat)$" {
+                # No grouping folder.
+            }
+
+            "^(Date)$" {
+                $pathParts.Add($date.ToString("yyyy"))
+                $pathParts.Add($date.ToString("MM"))
+                $pathParts.Add($date.ToString("dd"))
+            }
+
+            "^(Year)$" {
+                $pathParts.Add($date.ToString("yyyy"))
+            }
+
+            "^(Month)$" {
+                $pathParts.Add($date.ToString("MM"))
+            }
+
+            "^(Day)$" {
+                $pathParts.Add($date.ToString("dd"))
+            }
+
+            "^(ComputerName)$" {
+                if ($null -eq $identity) {
+                    $identity = Get-EndpointIdentitySafe
+                }
+
+                $pathParts.Add((ConvertTo-BlobPathSafePart -Value $identity.ComputerName))
+            }
+
+            "^(SerialNumber)$" {
+                if ($null -eq $identity) {
+                    $identity = Get-EndpointIdentitySafe
+                }
+
+                $pathParts.Add((ConvertTo-BlobPathSafePart -Value $identity.SerialNumber))
+            }
+
+            default {
+                throw "Unsupported BlobStoreGroupBy value: $groupValue"
+            }
+        }
+    }
+
+    $pathParts.Add($safeFileName)
+
+    return ($pathParts -join "/")
+}
+
+# ------------------------------------------------------------
+# Upload helpers
+# ------------------------------------------------------------
 
 function Get-FileContentMD5Base64 {
     param(
@@ -260,6 +395,10 @@ function New-UploadSnapshot {
     Get-Item -Path $snapshotPath -ErrorAction Stop
 }
 
+# ------------------------------------------------------------
+# State helpers
+# ------------------------------------------------------------
+
 function Get-StateObject {
     param(
         [string]$StatePath
@@ -323,127 +462,6 @@ function Save-StateObject {
         Set-Content -Path $StatePath -Encoding UTF8
 }
 
-function Get-ComputerNameFromFileName {
-    param(
-        [System.IO.FileInfo]$File
-    )
-
-    try {
-        $parts = $File.BaseName -split "-"
-
-        if ($parts.Count -ge 3) {
-            return $parts[2]
-        }
-    }
-    catch {}
-
-    return $env:COMPUTERNAME
-}
-
-function Get-EndpointIdentitySafe {
-    $identity = $null
-
-    try {
-        Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
-
-        if (Get-Command Get-EndpointIdentity -ErrorAction SilentlyContinue) {
-            $identity = Get-EndpointIdentity
-        }
-    }
-    catch {}
-
-    if ($null -eq $identity) {
-        $identity = [pscustomobject]@{
-            ComputerName = $env:COMPUTERNAME
-            SerialNumber = "UnknownSerial"
-        }
-    }
-
-    if ([string]::IsNullOrWhiteSpace($identity.ComputerName)) {
-        $identity.ComputerName = $env:COMPUTERNAME
-    }
-
-    if ([string]::IsNullOrWhiteSpace($identity.SerialNumber)) {
-        $identity.SerialNumber = "UnknownSerial"
-    }
-
-    return $identity
-}
-
-function Get-BlobPath {
-    param(
-        [System.IO.FileInfo]$File,
-        [string]$BlobPrefix,
-        [object[]]$BlobStoreGroupBy
-    )
-
-    if ($null -eq $BlobStoreGroupBy -or $BlobStoreGroupBy.Count -eq 0) {
-        $BlobStoreGroupBy = @("Date")
-    }
-
-    $prefix = $BlobPrefix.Trim("/")
-    $safeFileName = ConvertTo-BlobPathSafePart -Value $File.Name
-    $pathParts = New-Object System.Collections.Generic.List[string]
-
-    if (-not [string]::IsNullOrWhiteSpace($prefix)) {
-        $pathParts.Add($prefix)
-    }
-
-    $date = $File.LastWriteTimeUtc
-    $identity = $null
-
-    foreach ($group in $BlobStoreGroupBy) {
-        $groupValue = [string]$group
-
-        switch -Regex ($groupValue) {
-            "^(Flat)$" {
-                # No grouping folders.
-            }
-
-            "^(Date)$" {
-                $pathParts.Add($date.ToString("yyyy"))
-                $pathParts.Add($date.ToString("MM"))
-                $pathParts.Add($date.ToString("dd"))
-            }
-
-            "^(Year)$" {
-                $pathParts.Add($date.ToString("yyyy"))
-            }
-
-            "^(Month)$" {
-                $pathParts.Add($date.ToString("MM"))
-            }
-
-            "^(Day)$" {
-                $pathParts.Add($date.ToString("dd"))
-            }
-
-            "^(ComputerName)$" {
-                if ($null -eq $identity) {
-                    $identity = Get-EndpointIdentitySafe
-                }
-
-                $pathParts.Add((ConvertTo-BlobPathSafePart -Value $identity.ComputerName))
-            }
-
-            "^(SerialNumber)$" {
-                if ($null -eq $identity) {
-                    $identity = Get-EndpointIdentitySafe
-                }
-
-                $pathParts.Add((ConvertTo-BlobPathSafePart -Value $identity.SerialNumber))
-            }
-
-            default {
-                throw "Unsupported BlobStoreGroupBy value: $groupValue"
-            }
-        }
-    }
-
-    $pathParts.Add($safeFileName)
-
-    return ($pathParts -join "/")
-}
 function Test-FileChanged {
     param(
         [System.IO.FileInfo]$File,
@@ -530,6 +548,10 @@ function Save-UploadRunState {
         Set-Content -Path $RunStatePath -Encoding UTF8
 }
 
+# ------------------------------------------------------------
+# Main
+# ------------------------------------------------------------
+
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -544,6 +566,7 @@ try {
     $ContainerSasUrl = [string]$config.ContainerSasUrl
     $BlobPrefix = [string]$config.BlobPrefix
     $BlobWriteMode = [string]$config.BlobWriteMode
+
     $BlobStoreGroupBy = @("Date")
 
     if ($config.BlobStoreGroupBy) {
@@ -626,6 +649,7 @@ try {
             LogRoot                       = $LogRoot
             Window                        = $Window
             Now                           = [bool]$Now
+            BlobPrefix                    = $BlobPrefix
             BlobStoreGroupBy              = ($BlobStoreGroupBy -join ",")
             MinimumUploadIntervalMinutes  = $MinimumUploadIntervalMinutes
             Status                        = "Started"
@@ -638,17 +662,21 @@ try {
             $cutoff = (Get-Date).AddHours(-1)
             $files = $files | Where-Object { $_.LastWriteTime -ge $cutoff }
         }
+
         "Daily" {
             $cutoff = (Get-Date).AddDays(-1)
             $files = $files | Where-Object { $_.LastWriteTime -ge $cutoff }
         }
+
         "Weekly" {
             $cutoff = (Get-Date).AddDays(-7)
             $files = $files | Where-Object { $_.LastWriteTime -ge $cutoff }
         }
+
         "SinceDate" {
             $files = $files | Where-Object { $_.LastWriteTime -ge $Since }
         }
+
         "AllChanged" {}
     }
 
