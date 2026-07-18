@@ -1,7 +1,7 @@
 {
-  "ConfigVersion": "2026.07.16.001",
-  "GeneratedUtc": "2026-07-16T09:00:00Z",
-  "UploadSasExpiresUtc": "2026-07-26T09:00:00Z",
+  "ConfigVersion": "2026.07.17.001",
+  "GeneratedUtc": "2026-07-17T09:00:00Z",
+  "UploadSasExpiresUtc": "2026-07-27T09:00:00Z",
 
   "LogRoot": "C:\\ProgramData\\OpenEndpointEvents\\Logs",
   "StateRoot": "C:\\ProgramData\\OpenEndpointEvents\\State",
@@ -11,10 +11,13 @@
   "BlobPrefix": "open-endpoint-events",
   "DefaultWindow": "AllChanged",
   "BlobWriteMode": "OverwriteDailyFile",
-  "BlobStoreGroupBy": ["Date"]
+  "BlobStoreGroupBy": ["Date"],
+
+  "UploadIntervalMinutes": 1440,
+  "MinimumUploadIntervalMinutes": 1440,
+  "ConfigRefreshIntervalHours": 12,
 
   "MinimumFileAgeSeconds": 30,
-  "MinimumUploadIntervalMinutes": 60,
 
   "MaxFilesPerRun": 100,
   "RetryCount": 3,

@@ -4,7 +4,8 @@
 
 .DESCRIPTION
     Downloads a remote uploader-config.json file, validates the content, writes it locally,
-    locks down ACLs, and logs success or failure using OpenEndpointEvents.
+    locks down ACLs, updates refresh state, and optionally applies scheduled task settings
+    from the remote config.
 
 .PARAMETER RefreshConfigPath
     Local config-refresh.json path.
@@ -12,27 +13,47 @@
 .PARAMETER Force
     Bypasses MinimumRefreshIntervalHours.
 
+.PARAMETER ApplySchedule
+    Applies scheduled task configuration from the downloaded remote uploader config.
+
 .PARAMETER StartUploaderAfterUpdate
-    Starts the upload scheduled task after a successful config update.
+    Starts the upload task after successful config refresh.
+
+.PARAMETER CorrelationId
+    Optional shared correlation ID for installer/config/uploader event correlation.
 
 .EXAMPLE
-    .\Update-OpenEndpointEventsConfig.ps1 -Force -StartUploaderAfterUpdate
+    .\Update-OpenEndpointEventsConfig.ps1 -Force -ApplySchedule -Verbose
 #>
 
 [CmdletBinding()]
 param(
     [string]$RefreshConfigPath = "C:\ProgramData\OpenEndpointEvents\Config\config-refresh.json",
-
     [switch]$Force,
-
-    [switch]$StartUploaderAfterUpdate
+    [switch]$ApplySchedule,
+    [switch]$StartUploaderAfterUpdate,
+    [string]$CorrelationId
 )
 
 $ErrorActionPreference = "Stop"
 
+if ([string]::IsNullOrWhiteSpace($CorrelationId)) {
+    $CorrelationId = "CONFIG-$((Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))-$($env:COMPUTERNAME)-$(([guid]::NewGuid().ToString()).Substring(0,8))"
+}
+
+$BaseRoot = "C:\ProgramData\OpenEndpointEvents"
+$ConfigRoot = Join-Path $BaseRoot "Config"
+$StateRoot = Join-Path $BaseRoot "State"
+$ScriptRoot = Join-Path $BaseRoot "Scripts"
+
+$UploadScriptPath = Join-Path $ScriptRoot "Upload-EndpointEvents.ps1"
+$ConfigRefreshScriptPath = Join-Path $ScriptRoot "Update-OpenEndpointEventsConfig.ps1"
+
+$ConfigTaskName = "OpenEndpointEvents Config Refresh"
+$UploadTaskName = "OpenEndpointEvents Upload"
+
 function Set-OpenEndpointEventsConfigAcl {
     param(
-        [Parameter(Mandatory = $true)]
         [string]$Path
     )
 
@@ -46,26 +67,65 @@ function Set-OpenEndpointEventsConfigAcl {
     icacls $Path /remove "Users" "Authenticated Users" "Everyone" 2>$null | Out-Null
 }
 
-function Write-ConfigInfo {
+function Write-StepInfo {
     param(
         [string]$EventName,
         [string]$Message,
         [hashtable]$Data
     )
 
+    Write-Verbose "[OpenEndpointEventsConfig] $Message"
+
     Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
 
     if (Get-Command Write-EndpointInfo -ErrorAction SilentlyContinue) {
+        if ($null -eq $Data) {
+            $Data = @{}
+        }
+
+        $Data["StepStatus"] = "Success"
+
         Write-EndpointInfo `
             -Source "OpenEndpointEventsConfig" `
             -EventName $EventName `
             -Message $Message `
+            -CorrelationId $CorrelationId `
             -IncludeEndpointIdentity `
+            -IncludeProcessInfo `
             -Data $Data | Out-Null
     }
 }
 
-function Write-ConfigError {
+function Write-StepWarn {
+    param(
+        [string]$EventName,
+        [string]$Message,
+        [hashtable]$Data
+    )
+
+    Write-Verbose "[OpenEndpointEventsConfig] WARNING: $Message"
+
+    Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+
+    if (Get-Command Write-EndpointWarn -ErrorAction SilentlyContinue) {
+        if ($null -eq $Data) {
+            $Data = @{}
+        }
+
+        $Data["StepStatus"] = "Warning"
+
+        Write-EndpointWarn `
+            -Source "OpenEndpointEventsConfig" `
+            -EventName $EventName `
+            -Message $Message `
+            -CorrelationId $CorrelationId `
+            -IncludeEndpointIdentity `
+            -IncludeProcessInfo `
+            -Data $Data | Out-Null
+    }
+}
+
+function Write-StepError {
     param(
         [string]$EventName,
         [string]$Message,
@@ -73,21 +133,189 @@ function Write-ConfigError {
         [hashtable]$Data
     )
 
+    Write-Verbose "[OpenEndpointEventsConfig] ERROR: $Message"
+
     Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
 
     if (Get-Command Write-EndpointError -ErrorAction SilentlyContinue) {
+        if ($null -eq $Data) {
+            $Data = @{}
+        }
+
+        $Data["StepStatus"] = "Failed"
+
         Write-EndpointError `
             -Source "OpenEndpointEventsConfig" `
             -EventName $EventName `
             -Message $Message `
+            -CorrelationId $CorrelationId `
             -ErrorRecord $ErrorRecord `
             -IncludeEndpointIdentity `
+            -IncludeProcessInfo `
             -Data $Data | Out-Null
     }
 }
 
+function New-DailyIntervalTriggers {
+    param(
+        [int]$IntervalMinutes,
+        [switch]$IncludeStartup,
+        [switch]$IncludeLogon
+    )
+
+    if ($IntervalMinutes -lt 15 -or $IntervalMinutes -gt 1440) {
+        throw "IntervalMinutes must be between 15 and 1440."
+    }
+
+    $triggers = New-Object System.Collections.Generic.List[object]
+
+    if ($IncludeStartup) {
+        $triggers.Add((New-ScheduledTaskTrigger -AtStartup))
+    }
+
+    if ($IncludeLogon) {
+        $triggers.Add((New-ScheduledTaskTrigger -AtLogOn))
+    }
+
+    $minute = 0
+
+    while ($minute -lt 1440) {
+        $time = [datetime]::Today.AddMinutes($minute)
+        $triggers.Add((New-ScheduledTaskTrigger -Daily -At $time))
+        $minute += $IntervalMinutes
+    }
+
+    return $triggers.ToArray()
+}
+
+function Register-OpenEndpointEventsTask {
+    param(
+        [string]$TaskName,
+        [string]$ScriptPath,
+        [string[]]$ScriptArguments,
+        [int]$IntervalMinutes
+    )
+
+    if (-not (Test-Path -Path $ScriptPath)) {
+        throw "Task script path does not exist: $ScriptPath"
+    }
+
+    $argumentText = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+
+    if ($ScriptArguments -and $ScriptArguments.Count -gt 0) {
+        $argumentText = "$argumentText $($ScriptArguments -join ' ')"
+    }
+
+    $action = New-ScheduledTaskAction `
+        -Execute "powershell.exe" `
+        -Argument $argumentText
+
+    $triggers = New-DailyIntervalTriggers `
+        -IntervalMinutes $IntervalMinutes `
+        -IncludeStartup `
+        -IncludeLogon
+
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId "SYSTEM" `
+        -RunLevel Highest
+
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -MultipleInstances IgnoreNew `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Action $action `
+        -Trigger $triggers `
+        -Principal $principal `
+        -Settings $settings `
+        -Force | Out-Null
+}
+
+function Apply-OpenEndpointEventsSchedule {
+    param(
+        [object]$Config
+    )
+
+    $uploadIntervalMinutes = if ($Config.UploadIntervalMinutes -ne $null) {
+        [int]$Config.UploadIntervalMinutes
+    }
+    elseif ($Config.MinimumUploadIntervalMinutes -ne $null) {
+        [int]$Config.MinimumUploadIntervalMinutes
+    }
+    else {
+        60
+    }
+
+    $configRefreshIntervalHours = if ($Config.ConfigRefreshIntervalHours -ne $null) {
+        [int]$Config.ConfigRefreshIntervalHours
+    }
+    else {
+        6
+    }
+
+    if ($uploadIntervalMinutes -lt 15 -or $uploadIntervalMinutes -gt 1440) {
+        throw "UploadIntervalMinutes must be between 15 and 1440."
+    }
+
+    if ($configRefreshIntervalHours -lt 1 -or $configRefreshIntervalHours -gt 24) {
+        throw "ConfigRefreshIntervalHours must be between 1 and 24."
+    }
+
+    $configRefreshIntervalMinutes = $configRefreshIntervalHours * 60
+
+    Write-StepInfo `
+        -EventName "ScheduleApplyStarted" `
+        -Message "Applying scheduled task configuration from remote config" `
+        -Data @{
+            UploadIntervalMinutes       = $uploadIntervalMinutes
+            ConfigRefreshIntervalHours  = $configRefreshIntervalHours
+            ConfigRefreshIntervalMins   = $configRefreshIntervalMinutes
+            UploadTaskName              = $UploadTaskName
+            ConfigTaskName              = $ConfigTaskName
+        }
+
+    Register-OpenEndpointEventsTask `
+        -TaskName $ConfigTaskName `
+        -ScriptPath $ConfigRefreshScriptPath `
+        -ScriptArguments @("-ApplySchedule") `
+        -IntervalMinutes $configRefreshIntervalMinutes
+
+    Register-OpenEndpointEventsTask `
+        -TaskName $UploadTaskName `
+        -ScriptPath $UploadScriptPath `
+        -ScriptArguments @("-Window", "AllChanged") `
+        -IntervalMinutes $uploadIntervalMinutes
+
+    Write-StepInfo `
+        -EventName "ScheduleApplied" `
+        -Message "Scheduled task configuration applied from remote config" `
+        -Data @{
+            UploadIntervalMinutes       = $uploadIntervalMinutes
+            ConfigRefreshIntervalHours  = $configRefreshIntervalHours
+            ConfigRefreshIntervalMins   = $configRefreshIntervalMinutes
+            UploadTaskName              = $UploadTaskName
+            ConfigTaskName              = $ConfigTaskName
+            Status                      = "Success"
+        }
+}
+
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    Write-Verbose "[OpenEndpointEventsConfig] CorrelationId: $CorrelationId"
+
+    Write-StepInfo `
+        -EventName "ConfigRefreshStarted" `
+        -Message "OpenEndpointEvents config refresh started" `
+        -Data @{
+            RefreshConfigPath = $RefreshConfigPath
+            Force             = [bool]$Force
+            ApplySchedule     = [bool]$ApplySchedule
+        }
 
     if (-not (Test-Path -Path $RefreshConfigPath)) {
         throw "Refresh config file not found: $RefreshConfigPath"
@@ -98,7 +326,6 @@ try {
     $configUri = [string]$refreshConfig.ConfigUri
     $localConfigPath = [string]$refreshConfig.LocalConfigPath
     $statePath = [string]$refreshConfig.StatePath
-    $minimumRefreshIntervalHours = [int]$refreshConfig.MinimumRefreshIntervalHours
 
     if ([string]::IsNullOrWhiteSpace($configUri)) {
         throw "ConfigUri is missing from $RefreshConfigPath"
@@ -130,12 +357,21 @@ try {
         $state = Get-Content -Path $statePath -Raw | ConvertFrom-Json
     }
 
+    $minimumRefreshIntervalHours = 6
+
+    if ($refreshConfig.MinimumRefreshIntervalHours) {
+        $minimumRefreshIntervalHours = [int]$refreshConfig.MinimumRefreshIntervalHours
+    }
+    elseif ($state -and $state.ConfigRefreshIntervalHours) {
+        $minimumRefreshIntervalHours = [int]$state.ConfigRefreshIntervalHours
+    }
+
     if (-not $Force -and $state -and $state.LastRefreshUtc -and $minimumRefreshIntervalHours -gt 0) {
         $lastRefresh = [datetime]$state.LastRefreshUtc
         $nextAllowed = $lastRefresh.ToUniversalTime().AddHours($minimumRefreshIntervalHours)
 
         if ((Get-Date).ToUniversalTime() -lt $nextAllowed) {
-            Write-ConfigInfo `
+            Write-StepInfo `
                 -EventName "ConfigRefreshSkipped" `
                 -Message "OpenEndpointEvents config refresh skipped due to minimum refresh interval" `
                 -Data @{
@@ -143,6 +379,7 @@ try {
                     LocalConfigPath   = $localConfigPath
                     LastRefreshUtc    = $lastRefresh.ToUniversalTime().ToString("o")
                     NextAllowedUtc    = $nextAllowed.ToString("o")
+                    MinimumRefreshIntervalHours = $minimumRefreshIntervalHours
                     Status            = "Skipped"
                 }
 
@@ -153,14 +390,37 @@ try {
     $tempPath = Join-Path $env:TEMP "uploader-config-$([guid]::NewGuid()).json"
 
     try {
+        Write-StepInfo `
+            -EventName "RemoteConfigDownloadStarted" `
+            -Message "Downloading remote uploader config" `
+            -Data @{
+                ConfigUriConfigured = $true
+                TempPath            = $tempPath
+            }
+
         $response = Invoke-WebRequest `
             -Uri $configUri `
             -OutFile $tempPath `
             -UseBasicParsing `
             -ErrorAction Stop
 
+        Write-StepInfo `
+            -EventName "RemoteConfigDownloaded" `
+            -Message "Remote uploader config downloaded" `
+            -Data @{
+                StatusCode = [int]$response.StatusCode
+                TempPath   = $tempPath
+            }
+
         $downloadedConfigRaw = Get-Content -Path $tempPath -Raw
         $downloadedConfig = $downloadedConfigRaw | ConvertFrom-Json
+
+        Write-StepInfo `
+            -EventName "RemoteConfigValidationStarted" `
+            -Message "Validating remote uploader config" `
+            -Data @{
+                ConfigVersion = $downloadedConfig.ConfigVersion
+            }
 
         if ([string]::IsNullOrWhiteSpace($downloadedConfig.ContainerSasUrl)) {
             throw "Downloaded uploader config does not contain ContainerSasUrl."
@@ -194,39 +454,101 @@ try {
             }
         }
 
+        $uploadIntervalMinutes = if ($downloadedConfig.UploadIntervalMinutes -ne $null) { [int]$downloadedConfig.UploadIntervalMinutes } else { 60 }
+        $configRefreshIntervalHours = if ($downloadedConfig.ConfigRefreshIntervalHours -ne $null) { [int]$downloadedConfig.ConfigRefreshIntervalHours } else { 6 }
+
+        Write-StepInfo `
+            -EventName "RemoteConfigValidated" `
+            -Message "Remote uploader config validated" `
+            -Data @{
+                ConfigVersion              = $downloadedConfig.ConfigVersion
+                UploadSasExpiresUtc        = $downloadedConfig.UploadSasExpiresUtc
+                UploadIntervalMinutes      = $uploadIntervalMinutes
+                ConfigRefreshIntervalHours = $configRefreshIntervalHours
+                BlobStoreGroupBy           = ($downloadedConfig.BlobStoreGroupBy -join ",")
+                BlobWriteMode              = $downloadedConfig.BlobWriteMode
+            }
+
         Copy-Item -Path $tempPath -Destination $localConfigPath -Force
         Set-OpenEndpointEventsConfigAcl -Path $localConfigRoot
 
         $hash = (Get-FileHash -Path $localConfigPath -Algorithm SHA256).Hash
 
+        Write-StepInfo `
+            -EventName "LocalConfigWritten" `
+            -Message "Local uploader config written" `
+            -Data @{
+                LocalConfigPath = $localConfigPath
+                Sha256          = $hash
+            }
+
+        # Update config-refresh.json with current refresh interval from remote config.
+        $updatedRefreshConfig = [ordered]@{
+            ConfigUri                    = $configUri
+            LocalConfigPath              = $localConfigPath
+            StatePath                    = $statePath
+            MinimumRefreshIntervalHours  = $configRefreshIntervalHours
+            RestartUploadTaskAfterUpdate = [bool]$refreshConfig.RestartUploadTaskAfterUpdate
+        }
+
+        $updatedRefreshConfig |
+            ConvertTo-Json -Depth 10 |
+            Set-Content -Path $RefreshConfigPath -Encoding UTF8
+
+        Set-OpenEndpointEventsConfigAcl -Path $localConfigRoot
+
         $newState = [ordered]@{
-            LastRefreshUtc      = (Get-Date).ToUniversalTime().ToString("o")
-            LocalConfigPath     = $localConfigPath
-            ConfigVersion       = $downloadedConfig.ConfigVersion
-            UploadSasExpiresUtc = $downloadedConfig.UploadSasExpiresUtc
-            Sha256              = $hash
-            StatusCode          = [int]$response.StatusCode
-            Status              = "Success"
+            LastRefreshUtc              = (Get-Date).ToUniversalTime().ToString("o")
+            LocalConfigPath             = $localConfigPath
+            ConfigVersion               = $downloadedConfig.ConfigVersion
+            UploadSasExpiresUtc         = $downloadedConfig.UploadSasExpiresUtc
+            UploadIntervalMinutes       = $uploadIntervalMinutes
+            ConfigRefreshIntervalHours  = $configRefreshIntervalHours
+            Sha256                      = $hash
+            StatusCode                  = [int]$response.StatusCode
+            Status                      = "Success"
         }
 
         $newState |
             ConvertTo-Json -Depth 10 |
             Set-Content -Path $statePath -Encoding UTF8
 
-        Write-ConfigInfo `
-            -EventName "ConfigUpdated" `
-            -Message "OpenEndpointEvents uploader config updated from remote config blob" `
+        Write-StepInfo `
+            -EventName "ConfigStateWritten" `
+            -Message "Config refresh state written" `
             -Data @{
-                RefreshConfigPath   = $RefreshConfigPath
-                LocalConfigPath     = $localConfigPath
-                ConfigVersion       = $downloadedConfig.ConfigVersion
-                UploadSasExpiresUtc = $downloadedConfig.UploadSasExpiresUtc
-                Sha256              = $hash
-                Status              = "Success"
+                StatePath                   = $statePath
+                ConfigVersion               = $downloadedConfig.ConfigVersion
+                UploadIntervalMinutes       = $uploadIntervalMinutes
+                ConfigRefreshIntervalHours  = $configRefreshIntervalHours
+                Status                      = "Success"
             }
 
-        if ($StartUploaderAfterUpdate -or [bool]$refreshConfig.RestartUploadTaskAfterUpdate) {
-            Start-ScheduledTask -TaskName "OpenEndpointEvents Upload" -ErrorAction SilentlyContinue
+        if ($ApplySchedule) {
+            Apply-OpenEndpointEventsSchedule -Config $downloadedConfig
+        }
+
+        Write-StepInfo `
+            -EventName "ConfigRefreshCompleted" `
+            -Message "OpenEndpointEvents uploader config refresh completed" `
+            -Data @{
+                LocalConfigPath             = $localConfigPath
+                ConfigVersion               = $downloadedConfig.ConfigVersion
+                UploadIntervalMinutes       = $uploadIntervalMinutes
+                ConfigRefreshIntervalHours  = $configRefreshIntervalHours
+                ApplySchedule               = [bool]$ApplySchedule
+                Status                      = "Success"
+            }
+
+        if ($StartUploaderAfterUpdate -or [bool]$updatedRefreshConfig.RestartUploadTaskAfterUpdate) {
+            Write-StepInfo `
+                -EventName "StartUploaderRequested" `
+                -Message "Starting uploader after config update" `
+                -Data @{
+                    UploadTaskName = $UploadTaskName
+                }
+
+            Start-ScheduledTask -TaskName $UploadTaskName -ErrorAction SilentlyContinue
         }
     }
     finally {
@@ -236,12 +558,13 @@ try {
     exit 0
 }
 catch {
-    Write-ConfigError `
+    Write-StepError `
         -EventName "ConfigUpdateFailed" `
         -Message "OpenEndpointEvents uploader config update failed" `
         -ErrorRecord $_ `
         -Data @{
             RefreshConfigPath = $RefreshConfigPath
+            ApplySchedule     = [bool]$ApplySchedule
             Status            = "Failed"
         }
 

@@ -1,6 +1,6 @@
 @{
     RootModule        = 'OpenEndpointEvents.psm1'
-    ModuleVersion     = '1.0.1'
+    ModuleVersion     = '1.1.0'
     GUID              = '7f98bb9c-3c6a-4b65-9871-7e8e7f0a9d41'
     Author            = 'OpenEndpointEvents contributors'
     CompanyName       = 'OpenEndpointEvents'
@@ -43,9 +43,9 @@
                 'Homelab'
             )
 
-            ProjectUri   = 'https://github.com/Flock-Master/OpenEndpointEvents'
-            LicenseUri   = 'https://github.com/Flock-Master/OpenEndpointEvents/blob/main/LICENSE'
-            ReleaseNotes = 'Initial OpenEndpointEvents release with endpoint event logging, daily NDJSON output, endpoint identity enrichment, structured data support, and comment-based help. Added uploader support scripts for Azure Blob upload and remote config refresh.'
+            ProjectUri   = 'https://github.com/OpenEndpointEvents/OpenEndpointEvents'
+            LicenseUri   = 'https://github.com/OpenEndpointEvents/OpenEndpointEvents/blob/main/LICENSE'
+            ReleaseNotes = 'v1.1.0 adds verbose step logging, correlated installer/config/uploader events, and remote-config-driven scheduled task application.'
         }
     }
 }

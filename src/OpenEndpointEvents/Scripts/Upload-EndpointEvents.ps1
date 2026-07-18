@@ -5,7 +5,7 @@
 .DESCRIPTION
     Uploads changed .ndjson files from the local OpenEndpointEvents log folder to Azure Blob Storage.
 
-    Version 1 behaviour:
+    Version 1.1 behaviour:
     - OverwriteDailyFile blob mode
     - AllChanged catch-up by default
     - Snapshot file before upload
@@ -15,6 +15,8 @@
     - Supports manual immediate upload with -Now
     - Supports script-side upload interval gating using MinimumUploadIntervalMinutes
     - Supports configurable blob path grouping using BlobStoreGroupBy
+    - Supports CorrelationId for installer/config/uploader traceability
+    - Supports -Verbose step output
 
 .PARAMETER ConfigPath
     Local uploader config file path.
@@ -37,16 +39,17 @@
 .PARAMETER IncludeCurrentFile
     Allows uploading the active current daily file.
 
+.PARAMETER CorrelationId
+    Optional shared correlation ID.
+
 .EXAMPLE
-    .\Upload-EndpointEvents.ps1 -Now -Window AllChanged
+    .\Upload-EndpointEvents.ps1 -Now -Window AllChanged -Verbose
 
 .EXAMPLE
     .\Upload-EndpointEvents.ps1 -Now -Window AllChanged -ForceUpload
-
-.EXAMPLE
-    .\Upload-EndpointEvents.ps1 -ConfigPath "C:\ProgramData\OpenEndpointEvents\Config\uploader-config.json"
 #>
 
+[CmdletBinding()]
 param(
     [string]$ConfigPath = "C:\ProgramData\OpenEndpointEvents\Config\uploader-config.json",
 
@@ -61,14 +64,16 @@ param(
 
     [switch]$IncludeCurrentFile,
 
-    [int]$MinimumFileAgeSeconds = -1
+    [int]$MinimumFileAgeSeconds = -1,
+
+    [string]$CorrelationId
 )
 
 $ErrorActionPreference = "Stop"
 
-# ------------------------------------------------------------
-# Logging helpers
-# ------------------------------------------------------------
+if ([string]::IsNullOrWhiteSpace($CorrelationId)) {
+    $CorrelationId = "UPLOAD-$((Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))-$($env:COMPUTERNAME)-$(([guid]::NewGuid().ToString()).Substring(0,8))"
+}
 
 function Write-UploaderInfo {
     param(
@@ -77,13 +82,20 @@ function Write-UploaderInfo {
         [hashtable]$Data
     )
 
+    Write-Verbose "[OpenEndpointEventsUploader] $Message"
+
     Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
 
     if (Get-Command Write-EndpointInfo -ErrorAction SilentlyContinue) {
+        if ($null -eq $Data) {
+            $Data = @{}
+        }
+
         Write-EndpointInfo `
             -Source "OpenEndpointEventsUploader" `
             -EventName $EventName `
             -Message $Message `
+            -CorrelationId $CorrelationId `
             -IncludeEndpointIdentity `
             -Data $Data | Out-Null
     }
@@ -96,13 +108,20 @@ function Write-UploaderWarn {
         [hashtable]$Data
     )
 
+    Write-Verbose "[OpenEndpointEventsUploader] WARNING: $Message"
+
     Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
 
     if (Get-Command Write-EndpointWarn -ErrorAction SilentlyContinue) {
+        if ($null -eq $Data) {
+            $Data = @{}
+        }
+
         Write-EndpointWarn `
             -Source "OpenEndpointEventsUploader" `
             -EventName $EventName `
             -Message $Message `
+            -CorrelationId $CorrelationId `
             -IncludeEndpointIdentity `
             -Data $Data | Out-Null
     }
@@ -116,22 +135,25 @@ function Write-UploaderError {
         [hashtable]$Data
     )
 
+    Write-Verbose "[OpenEndpointEventsUploader] ERROR: $Message"
+
     Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
 
     if (Get-Command Write-EndpointError -ErrorAction SilentlyContinue) {
+        if ($null -eq $Data) {
+            $Data = @{}
+        }
+
         Write-EndpointError `
             -Source "OpenEndpointEventsUploader" `
             -EventName $EventName `
             -Message $Message `
+            -CorrelationId $CorrelationId `
             -ErrorRecord $ErrorRecord `
             -IncludeEndpointIdentity `
             -Data $Data | Out-Null
     }
 }
-
-# ------------------------------------------------------------
-# Path / identity helpers
-# ------------------------------------------------------------
 
 function ConvertTo-BlobPathSafePart {
     param(
@@ -216,7 +238,6 @@ function Get-BlobPath {
 
         switch -Regex ($groupValue) {
             "^(Flat)$" {
-                # No grouping folder.
             }
 
             "^(Date)$" {
@@ -264,10 +285,6 @@ function Get-BlobPath {
     return ($pathParts -join "/")
 }
 
-# ------------------------------------------------------------
-# Upload helpers
-# ------------------------------------------------------------
-
 function Get-FileContentMD5Base64 {
     param(
         [string]$Path
@@ -311,6 +328,7 @@ function Invoke-WithRetry {
                 throw
             }
 
+            Write-Verbose "[OpenEndpointEventsUploader] Retry attempt $attempt failed. Waiting $RetryDelaySeconds seconds."
             Start-Sleep -Seconds $RetryDelaySeconds
         }
     }
@@ -394,10 +412,6 @@ function New-UploadSnapshot {
 
     Get-Item -Path $snapshotPath -ErrorAction Stop
 }
-
-# ------------------------------------------------------------
-# State helpers
-# ------------------------------------------------------------
 
 function Get-StateObject {
     param(
@@ -548,12 +562,10 @@ function Save-UploadRunState {
         Set-Content -Path $RunStatePath -Encoding UTF8
 }
 
-# ------------------------------------------------------------
-# Main
-# ------------------------------------------------------------
-
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    Write-Verbose "[OpenEndpointEventsUploader] CorrelationId: $CorrelationId"
 
     if (-not (Test-Path -Path $ConfigPath)) {
         throw "Uploader config file not found: $ConfigPath"
@@ -649,6 +661,7 @@ try {
             LogRoot                       = $LogRoot
             Window                        = $Window
             Now                           = [bool]$Now
+            ForceUpload                   = [bool]$ForceUpload
             BlobPrefix                    = $BlobPrefix
             BlobStoreGroupBy              = ($BlobStoreGroupBy -join ",")
             MinimumUploadIntervalMinutes  = $MinimumUploadIntervalMinutes
@@ -711,6 +724,15 @@ try {
             -BlobStoreGroupBy $BlobStoreGroupBy
 
         try {
+            Write-UploaderInfo `
+                -EventName "FileUploadStarted" `
+                -Message "Uploading endpoint event file" `
+                -Data @{
+                    LocalPath = $file.FullName
+                    BlobPath  = $blobPath
+                    Length    = $file.Length
+                }
+
             $snapshot = New-UploadSnapshot -File $file -SnapshotRoot $SnapshotRoot
 
             $uploadResult = Invoke-WithRetry `
