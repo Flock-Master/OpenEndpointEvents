@@ -1,6 +1,6 @@
 @{
     RootModule        = 'OpenEndpointEvents.psm1'
-    ModuleVersion     = '1.1.0'
+    ModuleVersion     = '1.1.1'
     GUID              = '7f98bb9c-3c6a-4b65-9871-7e8e7f0a9d41'
     Author            = 'OpenEndpointEvents contributors'
     CompanyName       = 'OpenEndpointEvents'
@@ -45,7 +45,7 @@
 
             ProjectUri   = 'https://github.com/OpenEndpointEvents/OpenEndpointEvents'
             LicenseUri   = 'https://github.com/OpenEndpointEvents/OpenEndpointEvents/blob/main/LICENSE'
-            ReleaseNotes = 'v1.1.0 adds verbose step logging, correlated installer/config/uploader events, and remote-config-driven scheduled task application.'
+            ReleaseNotes = 'v1.1.1 fixes uploader looping error.'
         }
     }
 }

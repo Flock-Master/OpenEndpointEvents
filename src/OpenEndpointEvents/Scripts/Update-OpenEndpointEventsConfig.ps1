@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Refreshes the local OpenEndpointEvents uploader configuration from a protected HTTPS config blob.
 
@@ -36,6 +36,33 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:OpenEndpointEventsModuleImported = $false
+
+function Import-OpenEndpointEventsQuiet {
+    if ($script:OpenEndpointEventsModuleImported) {
+        return
+    }
+
+    if (Get-Command Write-EndpointInfo -ErrorAction SilentlyContinue) {
+        $script:OpenEndpointEventsModuleImported = $true
+        return
+    }
+
+    $module = Get-Module -ListAvailable OpenEndpointEvents |
+        Sort-Object Version -Descending |
+        Select-Object -First 1
+
+    if ($module) {
+        Import-Module $module.Path `
+            -Force `
+            -Global `
+            -ErrorAction SilentlyContinue `
+            -Verbose:$false | Out-Null
+
+        $script:OpenEndpointEventsModuleImported = $true
+    }
+}
+
 
 if ([string]::IsNullOrWhiteSpace($CorrelationId)) {
     $CorrelationId = "CONFIG-$((Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))-$($env:COMPUTERNAME)-$(([guid]::NewGuid().ToString()).Substring(0,8))"
@@ -76,7 +103,7 @@ function Write-StepInfo {
 
     Write-Verbose "[OpenEndpointEventsConfig] $Message"
 
-    Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+    Import-OpenEndpointEventsQuiet
 
     if (Get-Command Write-EndpointInfo -ErrorAction SilentlyContinue) {
         if ($null -eq $Data) {
@@ -105,7 +132,7 @@ function Write-StepWarn {
 
     Write-Verbose "[OpenEndpointEventsConfig] WARNING: $Message"
 
-    Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+    Import-OpenEndpointEventsQuiet
 
     if (Get-Command Write-EndpointWarn -ErrorAction SilentlyContinue) {
         if ($null -eq $Data) {
@@ -135,7 +162,7 @@ function Write-StepError {
 
     Write-Verbose "[OpenEndpointEventsConfig] ERROR: $Message"
 
-    Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+    Import-OpenEndpointEventsQuiet
 
     if (Get-Command Write-EndpointError -ErrorAction SilentlyContinue) {
         if ($null -eq $Data) {

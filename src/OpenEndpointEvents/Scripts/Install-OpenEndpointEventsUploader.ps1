@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Installs the OpenEndpointEvents Azure Blob uploader bootstrap.
 
@@ -39,6 +39,33 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:OpenEndpointEventsModuleImported = $false
+
+function Import-OpenEndpointEventsQuiet {
+    if ($script:OpenEndpointEventsModuleImported) {
+        return
+    }
+
+    if (Get-Command Write-EndpointInfo -ErrorAction SilentlyContinue) {
+        $script:OpenEndpointEventsModuleImported = $true
+        return
+    }
+
+    $module = Get-Module -ListAvailable OpenEndpointEvents |
+        Sort-Object Version -Descending |
+        Select-Object -First 1
+
+    if ($module) {
+        Import-Module $module.Path `
+            -Force `
+            -Global `
+            -ErrorAction SilentlyContinue `
+            -Verbose:$false | Out-Null
+
+        $script:OpenEndpointEventsModuleImported = $true
+    }
+}
+
 
 # ------------------------------------------------------------
 # Validation
@@ -107,7 +134,7 @@ function Write-StepInfo {
 
     Write-Verbose "[OpenEndpointEventsInstaller] $Message"
 
-    Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+    Import-OpenEndpointEventsQuiet
 
     if (Get-Command Write-EndpointInfo -ErrorAction SilentlyContinue) {
         if ($null -eq $Data) {
@@ -137,7 +164,7 @@ function Write-StepError {
 
     Write-Verbose "[OpenEndpointEventsInstaller] ERROR: $Message"
 
-    Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+    Import-OpenEndpointEventsQuiet
 
     if (Get-Command Write-EndpointError -ErrorAction SilentlyContinue) {
         if ($null -eq $Data) {
@@ -218,7 +245,7 @@ try {
         throw "OpenEndpointEvents module could not be found or installed."
     }
 
-    Import-Module OpenEndpointEvents -Force
+    Import-OpenEndpointEventsQuiet
 
     Write-StepInfo `
         -EventName "ModuleLocated" `

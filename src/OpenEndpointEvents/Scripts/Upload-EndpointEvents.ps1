@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Uploads OpenEndpointEvents NDJSON log files to Azure Blob Storage.
 
@@ -70,6 +70,33 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:OpenEndpointEventsModuleImported = $false
+
+function Import-OpenEndpointEventsQuiet {
+    if ($script:OpenEndpointEventsModuleImported) {
+        return
+    }
+
+    if (Get-Command Write-EndpointInfo -ErrorAction SilentlyContinue) {
+        $script:OpenEndpointEventsModuleImported = $true
+        return
+    }
+
+    $module = Get-Module -ListAvailable OpenEndpointEvents |
+        Sort-Object Version -Descending |
+        Select-Object -First 1
+
+    if ($module) {
+        Import-Module $module.Path `
+            -Force `
+            -Global `
+            -ErrorAction SilentlyContinue `
+            -Verbose:$false | Out-Null
+
+        $script:OpenEndpointEventsModuleImported = $true
+    }
+}
+
 
 if ([string]::IsNullOrWhiteSpace($CorrelationId)) {
     $CorrelationId = "UPLOAD-$((Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))-$($env:COMPUTERNAME)-$(([guid]::NewGuid().ToString()).Substring(0,8))"
@@ -84,7 +111,7 @@ function Write-UploaderInfo {
 
     Write-Verbose "[OpenEndpointEventsUploader] $Message"
 
-    Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+    Import-OpenEndpointEventsQuiet
 
     if (Get-Command Write-EndpointInfo -ErrorAction SilentlyContinue) {
         if ($null -eq $Data) {
@@ -110,7 +137,7 @@ function Write-UploaderWarn {
 
     Write-Verbose "[OpenEndpointEventsUploader] WARNING: $Message"
 
-    Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+    Import-OpenEndpointEventsQuiet
 
     if (Get-Command Write-EndpointWarn -ErrorAction SilentlyContinue) {
         if ($null -eq $Data) {
@@ -137,7 +164,7 @@ function Write-UploaderError {
 
     Write-Verbose "[OpenEndpointEventsUploader] ERROR: $Message"
 
-    Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+    Import-OpenEndpointEventsQuiet
 
     if (Get-Command Write-EndpointError -ErrorAction SilentlyContinue) {
         if ($null -eq $Data) {
@@ -185,7 +212,7 @@ function Get-EndpointIdentitySafe {
     $identity = $null
 
     try {
-        Import-Module OpenEndpointEvents -ErrorAction SilentlyContinue
+        Import-OpenEndpointEventsQuiet
 
         if (Get-Command Get-EndpointIdentity -ErrorAction SilentlyContinue) {
             $identity = Get-EndpointIdentity

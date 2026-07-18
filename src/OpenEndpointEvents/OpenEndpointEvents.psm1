@@ -219,7 +219,8 @@ function ConvertTo-EndpointEventData {
     - OSBuild
     - Domain
 
-    This function is used by Write-EndpointEvent when -IncludeEndpointIdentity is specified.
+    This function suppresses CIM verbose output so that parent scripts using -Verbose
+    do not get noisy Get-CimInstance messages.
 
 .EXAMPLE
     Get-EndpointIdentity
@@ -232,25 +233,15 @@ function ConvertTo-EndpointEventData {
 
     Gets the local endpoint serial number.
 
-.EXAMPLE
-    $identity = Get-EndpointIdentity
-
-    Write-EndpointInfo `
-        -Message "Identity captured" `
-        -Data @{
-            ComputerName = $identity.ComputerName
-            SerialNumber = $identity.SerialNumber
-            Model        = $identity.Model
-        }
-
-    Writes endpoint identity details as a custom event.
-
 .OUTPUTS
     PSCustomObject
 #>
 function Get-EndpointIdentity {
     [CmdletBinding()]
     param()
+
+    $previousVerbosePreference = $VerbosePreference
+    $VerbosePreference = "SilentlyContinue"
 
     $serialNumber = "UnknownSerial"
     $manufacturer = $null
@@ -260,37 +251,53 @@ function Get-EndpointIdentity {
     $domain = $null
 
     try {
-        $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop
+        try {
+            $bios = Get-CimInstance `
+                -ClassName Win32_BIOS `
+                -ErrorAction Stop `
+                -Verbose:$false
 
-        if (-not [string]::IsNullOrWhiteSpace($bios.SerialNumber)) {
-            $serialNumber = $bios.SerialNumber
+            if (-not [string]::IsNullOrWhiteSpace($bios.SerialNumber)) {
+                $serialNumber = $bios.SerialNumber
+            }
+        }
+        catch {}
+
+        try {
+            $cs = Get-CimInstance `
+                -ClassName Win32_ComputerSystem `
+                -ErrorAction Stop `
+                -Verbose:$false
+
+            $manufacturer = $cs.Manufacturer
+            $model = $cs.Model
+            $domain = $cs.Domain
+        }
+        catch {}
+
+        try {
+            $os = Get-CimInstance `
+                -ClassName Win32_OperatingSystem `
+                -ErrorAction Stop `
+                -Verbose:$false
+
+            $osVersion = $os.Version
+            $osBuild = $os.BuildNumber
+        }
+        catch {}
+
+        [pscustomobject]@{
+            ComputerName = $env:COMPUTERNAME
+            SerialNumber = ($serialNumber -replace '[^a-zA-Z0-9\-_]', '_')
+            Manufacturer = $manufacturer
+            Model        = $model
+            OSVersion    = $osVersion
+            OSBuild      = $osBuild
+            Domain       = $domain
         }
     }
-    catch {}
-
-    try {
-        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
-        $manufacturer = $cs.Manufacturer
-        $model = $cs.Model
-        $domain = $cs.Domain
-    }
-    catch {}
-
-    try {
-        $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
-        $osVersion = $os.Version
-        $osBuild = $os.BuildNumber
-    }
-    catch {}
-
-    [pscustomobject]@{
-        ComputerName = $env:COMPUTERNAME
-        SerialNumber = ($serialNumber -replace '[^a-zA-Z0-9\-_]', '_')
-        Manufacturer = $manufacturer
-        Model        = $model
-        OSVersion    = $osVersion
-        OSBuild      = $osBuild
-        Domain       = $domain
+    finally {
+        $VerbosePreference = $previousVerbosePreference
     }
 }
 
