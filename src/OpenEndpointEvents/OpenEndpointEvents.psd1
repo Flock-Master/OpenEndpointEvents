@@ -43,8 +43,8 @@
                 'Homelab'
             )
 
-            ProjectUri   = 'https://github.com/OpenEndpointEvents/OpenEndpointEvents'
-            LicenseUri   = 'https://github.com/OpenEndpointEvents/OpenEndpointEvents/blob/main/LICENSE'
+            ProjectUri   = 'https://github.com/Flock-Master/OpenEndpointEvents'
+            LicenseUri   = 'https://github.com/Flock-Master/OpenEndpointEvents/blob/main/LICENSE'
             ReleaseNotes = 'Seperates the Uploader from the stable Event Logger'
         }
     }
