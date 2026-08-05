@@ -27,32 +27,21 @@ function Get-EndpointEventMutexName {
     }
 }
 
-<#
-.SYNOPSIS
-    Converts a string into a filesystem-safe value.
-
-.DESCRIPTION
-    Replaces characters that are unsafe or undesirable in filenames with underscores.
-    Useful when generating log filenames from dynamic values such as computer name,
-    serial number, source name, event name, room name, site name, or asset tag.
-
-.PARAMETER Value
-    The string value to sanitize.
-
-.EXAMPLE
-    ConvertTo-SafeFilePart -Value "endpoint/001:health check"
-
-    Returns a sanitized value suitable for use in a filename.
-
-.EXAMPLE
-    $safeComputerName = ConvertTo-SafeFilePart -Value $env:COMPUTERNAME
-
-    Converts the local computer name into a safe filename component.
-
-.OUTPUTS
-    System.String
-#>
 function ConvertTo-SafeFilePart {
+    <#
+    .SYNOPSIS
+        Converts a string into a filesystem-safe value.
+
+    .DESCRIPTION
+        Replaces characters that are unsafe or undesirable in filenames with underscores.
+
+    .PARAMETER Value
+        The string value to sanitize.
+
+    .EXAMPLE
+        ConvertTo-SafeFilePart -Value "endpoint/001:health check"
+    #>
+
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -67,46 +56,21 @@ function ConvertTo-SafeFilePart {
     return ($Value -replace '[^a-zA-Z0-9\-_\.]', '_')
 }
 
-<#
-.SYNOPSIS
-    Normalizes an endpoint event level.
-
-.DESCRIPTION
-    Converts common level aliases into consistent uppercase endpoint event levels.
-
-    Normalized values include:
-    - INFO
-    - WARN
-    - ERROR
-    - DEBUG
-    - TRACE
-    - FATAL
-
-.PARAMETER Level
-    The event level value to normalize.
-
-.EXAMPLE
-    ConvertTo-EndpointEventLevel -Level "warning"
-
-    Returns:
-    WARN
-
-.EXAMPLE
-    ConvertTo-EndpointEventLevel -Level "Information"
-
-    Returns:
-    INFO
-
-.EXAMPLE
-    ConvertTo-EndpointEventLevel -Level "critical"
-
-    Returns:
-    FATAL
-
-.OUTPUTS
-    System.String
-#>
 function ConvertTo-EndpointEventLevel {
+    <#
+    .SYNOPSIS
+        Normalizes an endpoint event level.
+
+    .DESCRIPTION
+        Converts common level aliases into consistent uppercase endpoint event levels.
+
+    .PARAMETER Level
+        The event level value to normalize.
+
+    .EXAMPLE
+        ConvertTo-EndpointEventLevel -Level "warning"
+    #>
+
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -124,42 +88,23 @@ function ConvertTo-EndpointEventLevel {
     }
 }
 
-<#
-.SYNOPSIS
-    Converts structured input data into ordered endpoint event data.
-
-.DESCRIPTION
-    Accepts hashtables, ordered dictionaries, PSCustomObjects, or simple objects
-    and converts them into a consistent ordered structure suitable for merging into
-    an endpoint event.
-
-.PARAMETER Data
-    Structured data to include in an endpoint event.
-
-.EXAMPLE
-    ConvertTo-EndpointEventData -Data @{ AssetTag = "C001HT"; Room = "B12" }
-
-    Converts a hashtable into ordered endpoint event data.
-
-.EXAMPLE
-    $object = [pscustomobject]@{
-        MachineName = "endpoint-001"
-        AssetTag    = "C001HT"
-    }
-
-    ConvertTo-EndpointEventData -Data $object
-
-    Converts a PSCustomObject into ordered endpoint event data.
-
-.EXAMPLE
-    ConvertTo-EndpointEventData -Data "simple value"
-
-    Converts a simple value into an object with a Data property.
-
-.OUTPUTS
-    System.Collections.Specialized.OrderedDictionary
-#>
 function ConvertTo-EndpointEventData {
+    <#
+    .SYNOPSIS
+        Converts structured input data into ordered endpoint event data.
+
+    .DESCRIPTION
+        Accepts hashtables, ordered dictionaries, PSCustomObjects, or simple objects
+        and converts them into a consistent ordered structure suitable for merging into
+        an endpoint event.
+
+    .PARAMETER Data
+        Structured data to include in an endpoint event.
+
+    .EXAMPLE
+        ConvertTo-EndpointEventData -Data @{ AssetTag = "C001HT"; Room = "B12" }
+    #>
+
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $false)]
@@ -205,38 +150,31 @@ function ConvertTo-EndpointEventData {
     }
 }
 
-<#
-.SYNOPSIS
-    Gets basic endpoint identity information.
-
-.DESCRIPTION
-    Collects common endpoint identity fields from WMI/CIM, including:
-    - ComputerName
-    - SerialNumber
-    - Manufacturer
-    - Model
-    - OSVersion
-    - OSBuild
-    - Domain
-
-    This function suppresses CIM verbose output so that parent scripts using -Verbose
-    do not get noisy Get-CimInstance messages.
-
-.EXAMPLE
-    Get-EndpointIdentity
-
-    Returns endpoint identity information for the current machine.
-
-.EXAMPLE
-    $identity = Get-EndpointIdentity
-    $identity.SerialNumber
-
-    Gets the local endpoint serial number.
-
-.OUTPUTS
-    PSCustomObject
-#>
 function Get-EndpointIdentity {
+    <#
+    .SYNOPSIS
+        Gets basic endpoint identity information.
+
+    .DESCRIPTION
+        Collects common endpoint identity fields from WMI/CIM.
+
+        Returned fields:
+        - ComputerName
+        - SerialNumber
+        - DeviceId
+        - Manufacturer
+        - Model
+        - OSVersion
+        - OSBuild
+        - Domain
+
+        CIM verbose output is suppressed so parent scripts using -Verbose do not get noisy
+        Get-CimInstance messages.
+
+    .EXAMPLE
+        Get-EndpointIdentity
+    #>
+
     [CmdletBinding()]
     param()
 
@@ -286,9 +224,20 @@ function Get-EndpointIdentity {
         }
         catch {}
 
+        $safeSerialNumber = ($serialNumber -replace '[^a-zA-Z0-9\-_]', '_')
+        $computerName = $env:COMPUTERNAME
+
+        $deviceId = if (-not [string]::IsNullOrWhiteSpace($safeSerialNumber) -and $safeSerialNumber -ne "UnknownSerial") {
+            $safeSerialNumber
+        }
+        else {
+            $computerName
+        }
+
         [pscustomobject]@{
-            ComputerName = $env:COMPUTERNAME
-            SerialNumber = ($serialNumber -replace '[^a-zA-Z0-9\-_]', '_')
+            ComputerName = $computerName
+            SerialNumber = $safeSerialNumber
+            DeviceId     = $deviceId
             Manufacturer = $manufacturer
             Model        = $model
             OSVersion    = $osVersion
@@ -301,66 +250,33 @@ function Get-EndpointIdentity {
     }
 }
 
-<#
-.SYNOPSIS
-    Creates a standard OpenEndpointEvents NDJSON log file path.
-
-.DESCRIPTION
-    Generates a log file path under the specified log root.
-
-    The filename can optionally include:
-    - Current date
-    - BIOS serial number
-    - Computer name
-
-    The generated file extension is always .ndjson if no .ndjson extension is provided.
-
-.PARAMETER Name
-    The base log filename. Defaults to endpoint-events.ndjson.
-
-.PARAMETER LogRoot
-    The directory where logs are written.
-    Defaults to C:\ProgramData\OpenEndpointEvents\Logs.
-
-.PARAMETER IncludeDate
-    Adds the current date to the filename using yyyyMMdd format.
-
-.PARAMETER IncludeComputerName
-    Adds the local computer name to the filename.
-
-.PARAMETER IncludeSerialNumber
-    Adds the BIOS serial number to the filename.
-
-.EXAMPLE
-    New-EndpointEventLogPath
-
-    Creates a default path:
-    C:\ProgramData\OpenEndpointEvents\Logs\endpoint-events.ndjson
-
-.EXAMPLE
-    New-EndpointEventLogPath -Name "health.ndjson" -IncludeDate -IncludeComputerName
-
-    Creates a path similar to:
-    C:\ProgramData\OpenEndpointEvents\Logs\20260619-LAB-PC-001-health.ndjson
-
-.EXAMPLE
-    $logPath = New-EndpointEventLogPath `
-        -Name "asset-inventory" `
-        -IncludeDate `
-        -IncludeSerialNumber `
-        -IncludeComputerName
-
-    Creates a date, serial, and computer-specific NDJSON log path.
-
-.EXAMPLE
-    $logPath = New-EndpointEventLogPath -Name "room-b12" -LogRoot "D:\EndpointEvents" -IncludeDate
-
-    Creates a custom daily log path under D:\EndpointEvents.
-
-.OUTPUTS
-    System.String
-#>
 function New-EndpointEventLogPath {
+    <#
+    .SYNOPSIS
+        Creates a standard OpenEndpointEvents NDJSON log file path.
+
+    .DESCRIPTION
+        Generates a log file path under the specified log root.
+
+    .PARAMETER Name
+        Base log filename. Defaults to endpoint-events.ndjson.
+
+    .PARAMETER LogRoot
+        Directory where logs are written.
+
+    .PARAMETER IncludeDate
+        Adds current date to the filename.
+
+    .PARAMETER IncludeComputerName
+        Adds computer name to the filename.
+
+    .PARAMETER IncludeSerialNumber
+        Adds BIOS serial number to the filename.
+
+    .EXAMPLE
+        New-EndpointEventLogPath -Name "health" -IncludeDate -IncludeSerialNumber -IncludeComputerName
+    #>
+
     [CmdletBinding()]
     param(
         [string]$Name = $script:DefaultLogName,
@@ -412,193 +328,50 @@ function New-EndpointEventLogPath {
     Join-Path -Path $LogRoot -ChildPath $fileName
 }
 
-<#
-.SYNOPSIS
-    Writes a generic structured endpoint event to an NDJSON file.
+function Add-EndpointIdentityToEvent {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$Entry
+    )
 
-.DESCRIPTION
-    Writes one compressed JSON object per line to an NDJSON file.
+    $identity = Get-EndpointIdentity
 
-    Supports:
-    - INFO, WARN, ERROR, DEBUG, TRACE, FATAL levels
-    - Plain text messages
-    - Arbitrary structured data
-    - Endpoint identity enrichment
-    - Process/user enrichment
-    - Shared correlation IDs
-    - Mutex-based safe concurrent writes
-    - Daily endpoint event files
+    $Entry["ComputerName"]  = $identity.ComputerName
+    $Entry["SerialNumber"]  = $identity.SerialNumber
+    $Entry["DeviceId"]      = $identity.DeviceId
+    $Entry["Manufacturer"]  = $identity.Manufacturer
+    $Entry["Model"]         = $identity.Model
+    $Entry["OSVersion"]     = $identity.OSVersion
+    $Entry["OSBuild"]       = $identity.OSBuild
+    $Entry["Domain"]        = $identity.Domain
+}
 
-    The function returns the path to the log file used.
-
-.PARAMETER Path
-    Explicit path to the NDJSON log file.
-
-    If omitted, a standard daily path is generated using New-EndpointEventLogPath.
-
-.PARAMETER LogRoot
-    Directory where logs are written when Path is not specified.
-    Defaults to C:\ProgramData\OpenEndpointEvents\Logs.
-
-.PARAMETER Name
-    Base log filename when Path is not specified.
-    Defaults to endpoint-events.ndjson.
-
-.PARAMETER Level
-    Event level.
-
-    Common values:
-    - INFO
-    - WARN
-    - ERROR
-    - DEBUG
-    - TRACE
-    - FATAL
-
-    Aliases such as Information, Warning, Err, and Critical are normalized.
-
-.PARAMETER Message
-    Human-readable message for the endpoint event.
-
-.PARAMETER Data
-    Optional structured data.
-
-    Accepts:
-    - Hashtable
-    - Ordered hashtable
-    - PSCustomObject
-    - Simple object
-
-.PARAMETER EventName
-    Optional event name, such as DiskCheck, UploadStarted, InventoryCollected, or TaskFailed.
-
-.PARAMETER Source
-    Optional source name, such as HealthCheck, BlobUploader, InventoryScript, ScheduledTask, or ClassroomBaseline.
-
-.PARAMETER CorrelationId
-    Optional shared ID used to group related events.
-
-    If omitted, a new GUID is generated for the event.
-
-.PARAMETER IncludeEndpointIdentity
-    Adds endpoint identity fields:
-    - ComputerName
-    - SerialNumber
-    - Manufacturer
-    - Model
-    - OSVersion
-    - OSBuild
-    - Domain
-
-.PARAMETER IncludeProcessInfo
-    Adds process execution fields:
-    - ProcessId
-    - ProcessName
-    - UserName
-
-.PARAMETER Depth
-    JSON serialization depth. Defaults to 20.
-
-.EXAMPLE
-    Write-EndpointEvent -Level INFO -Message "Script started"
-
-    Writes a basic INFO event to the default daily NDJSON log path.
-
-.EXAMPLE
-    Write-EndpointEvent -Level WARN -Message "Disk space below threshold"
-
-    Writes a basic WARN event.
-
-.EXAMPLE
-    Write-EndpointEvent -Level ERROR -Message "Blob upload failed"
-
-    Writes a basic ERROR event.
-
-.EXAMPLE
-    Write-EndpointEvent `
-        -Level INFO `
-        -Message "Asset inventory captured" `
-        -Data @{
-            MachineName = "endpoint-001"
-            AssetTag    = "C001HT"
-            Room        = "B12"
-            Site        = "Auckland"
-        }
-
-    Writes a structured inventory event.
-
-.EXAMPLE
-    Write-EndpointEvent `
-        -Level INFO `
-        -Source "HealthCheck" `
-        -EventName "DiskCheckCompleted" `
-        -Message "Disk check completed" `
-        -IncludeEndpointIdentity `
-        -Data @{
-            Drive       = "C:"
-            FreeGB      = 42.7
-            TotalGB     = 237.8
-            PercentFree = 17.9
-            Status      = "Healthy"
-        }
-
-    Writes a structured health check event with endpoint identity.
-
-.EXAMPLE
-    $correlationId = "20260619-DAILY-HEALTHCHECK"
-
-    Write-EndpointEvent `
-        -Level INFO `
-        -Source "HealthCheck" `
-        -EventName "Started" `
-        -Message "Daily health check started" `
-        -CorrelationId $correlationId
-
-    Write-EndpointEvent `
-        -Level INFO `
-        -Source "HealthCheck" `
-        -EventName "Completed" `
-        -Message "Daily health check completed" `
-        -CorrelationId $correlationId `
-        -Data @{
-            Status = "Success"
-        }
-
-    Writes multiple related events with the same correlation ID.
-
-.EXAMPLE
-    $logPath = New-EndpointEventLogPath `
-        -Name "asset-inventory" `
-        -IncludeDate `
-        -IncludeSerialNumber `
-        -IncludeComputerName
-
-    Write-EndpointEvent `
-        -Path $logPath `
-        -Level INFO `
-        -Message "Asset inventory captured" `
-        -Data @{
-            AssetTag = "C001HT"
-        }
-
-    Writes to an explicitly generated log path.
-
-.EXAMPLE
-    Write-EndpointEvent `
-        -Level INFO `
-        -Message "Scheduled task started" `
-        -IncludeEndpointIdentity `
-        -IncludeProcessInfo `
-        -Data @{
-            TaskName = "OpenEndpointEvents Upload"
-        }
-
-    Writes an event with endpoint identity and process context.
-
-.OUTPUTS
-    System.String
-#>
 function Write-EndpointEvent {
+    <#
+    .SYNOPSIS
+        Writes a generic structured endpoint event to an NDJSON file.
+
+    .DESCRIPTION
+        Writes one compressed JSON object per line to an NDJSON file.
+
+        In v1.2.0, endpoint identity is included by default.
+        Use -NoEndpointIdentity to opt out.
+
+    .PARAMETER NoEndpointIdentity
+        Prevents ComputerName, SerialNumber, DeviceId, Manufacturer, Model, OSVersion,
+        OSBuild, and Domain from being added to the event.
+
+    .PARAMETER IncludeEndpointIdentity
+        Backward-compatible switch. Endpoint identity is now included by default.
+
+    .EXAMPLE
+        Write-EndpointEvent -Level INFO -Message "Script started"
+
+    .EXAMPLE
+        Write-EndpointEvent -Level INFO -Message "Anonymous local test" -NoEndpointIdentity
+    #>
+
     [CmdletBinding()]
     param(
         [string]$Path,
@@ -623,6 +396,8 @@ function Write-EndpointEvent {
         [string]$CorrelationId,
 
         [switch]$IncludeEndpointIdentity,
+
+        [switch]$NoEndpointIdentity,
 
         [switch]$IncludeProcessInfo,
 
@@ -657,16 +432,8 @@ function Write-EndpointEvent {
         CorrelationId = $CorrelationId
     }
 
-    if ($IncludeEndpointIdentity) {
-        $identity = Get-EndpointIdentity
-
-        $entry["ComputerName"]  = $identity.ComputerName
-        $entry["SerialNumber"]  = $identity.SerialNumber
-        $entry["Manufacturer"]  = $identity.Manufacturer
-        $entry["Model"]         = $identity.Model
-        $entry["OSVersion"]     = $identity.OSVersion
-        $entry["OSBuild"]       = $identity.OSBuild
-        $entry["Domain"]        = $identity.Domain
+    if (-not $NoEndpointIdentity) {
+        Add-EndpointIdentityToEvent -Entry $entry
     }
 
     if ($IncludeProcessInfo) {
@@ -720,73 +487,21 @@ function Write-EndpointEvent {
     return $Path
 }
 
-<#
-.SYNOPSIS
-    Writes an INFO-level endpoint event.
-
-.DESCRIPTION
-    Convenience wrapper around Write-EndpointEvent that writes with Level set to INFO.
-
-.PARAMETER Message
-    Human-readable message for the endpoint event.
-
-.PARAMETER Data
-    Optional structured data to merge into the JSON event.
-
-.PARAMETER Path
-    Explicit path to the NDJSON log file.
-
-.PARAMETER Name
-    Base log filename when Path is not specified.
-
-.PARAMETER LogRoot
-    Directory where logs are written when Path is not specified.
-
-.PARAMETER EventName
-    Optional event name.
-
-.PARAMETER Source
-    Optional source name.
-
-.PARAMETER CorrelationId
-    Optional shared ID used to group related events.
-
-.PARAMETER IncludeEndpointIdentity
-    Adds endpoint identity fields.
-
-.PARAMETER IncludeProcessInfo
-    Adds process execution fields.
-
-.EXAMPLE
-    Write-EndpointInfo -Message "Script started"
-
-    Writes a simple INFO event.
-
-.EXAMPLE
-    Write-EndpointInfo `
-        -Source "Inventory" `
-        -EventName "AssetCaptured" `
-        -Message "Asset inventory captured" `
-        -Data @{
-            MachineName = "endpoint-001"
-            AssetTag    = "C001HT"
-            Room        = "B12"
-        }
-
-    Writes a structured INFO event.
-
-.EXAMPLE
-    Write-EndpointInfo `
-        -Message "Scheduled task started" `
-        -IncludeEndpointIdentity `
-        -IncludeProcessInfo
-
-    Writes an INFO event with endpoint and process details.
-
-.OUTPUTS
-    System.String
-#>
 function Write-EndpointInfo {
+    <#
+    .SYNOPSIS
+        Writes an INFO-level endpoint event.
+
+    .DESCRIPTION
+        Convenience wrapper around Write-EndpointEvent.
+
+        Endpoint identity is included by default.
+        Use -NoEndpointIdentity to opt out.
+
+    .EXAMPLE
+        Write-EndpointInfo -Message "Script started"
+    #>
+
     [CmdletBinding()]
     param(
         [string]$Message,
@@ -798,6 +513,7 @@ function Write-EndpointInfo {
         [string]$Source,
         [string]$CorrelationId,
         [switch]$IncludeEndpointIdentity,
+        [switch]$NoEndpointIdentity,
         [switch]$IncludeProcessInfo
     )
 
@@ -812,85 +528,25 @@ function Write-EndpointInfo {
         -Source $Source `
         -CorrelationId $CorrelationId `
         -IncludeEndpointIdentity:$IncludeEndpointIdentity `
+        -NoEndpointIdentity:$NoEndpointIdentity `
         -IncludeProcessInfo:$IncludeProcessInfo
 }
 
-<#
-.SYNOPSIS
-    Writes a WARN-level endpoint event.
-
-.DESCRIPTION
-    Convenience wrapper around Write-EndpointEvent that writes with Level set to WARN.
-
-.PARAMETER Message
-    Human-readable warning message.
-
-.PARAMETER Data
-    Optional structured data to merge into the JSON event.
-
-.PARAMETER Path
-    Explicit path to the NDJSON log file.
-
-.PARAMETER Name
-    Base log filename when Path is not specified.
-
-.PARAMETER LogRoot
-    Directory where logs are written when Path is not specified.
-
-.PARAMETER EventName
-    Optional event name.
-
-.PARAMETER Source
-    Optional source name.
-
-.PARAMETER CorrelationId
-    Optional shared ID used to group related events.
-
-.PARAMETER IncludeEndpointIdentity
-    Adds endpoint identity fields.
-
-.PARAMETER IncludeProcessInfo
-    Adds process execution fields.
-
-.EXAMPLE
-    Write-EndpointWarn -Message "Disk space below threshold"
-
-    Writes a simple WARN event.
-
-.EXAMPLE
-    Write-EndpointWarn `
-        -Source "HealthCheck" `
-        -EventName "LowDiskSpace" `
-        -Message "Free disk space is below threshold" `
-        -IncludeEndpointIdentity `
-        -Data @{
-            Drive       = "C:"
-            FreeGB      = 8.2
-            ThresholdGB = 10
-            Status      = "Warning"
-        }
-
-    Writes a structured WARN event.
-
-.EXAMPLE
-    Write-EndpointWarn `
-        -Source "ClassroomBaseline" `
-        -EventName "ConfigurationDriftDetected" `
-        -Message "Classroom endpoint configuration drift detected" `
-        -Data @{
-            Room       = "B12"
-            Setting    = "WallpaperLock"
-            Expected   = "Enabled"
-            Actual     = "Disabled"
-            Status     = "NonCompliant"
-        }
-
-    Writes a warning event for an education computer room baseline check.
-
-.OUTPUTS
-    System.String
-#>
 function Write-EndpointWarn {
+    <#
+    .SYNOPSIS
+        Writes a WARN-level endpoint event.
+
+    .DESCRIPTION
+        Convenience wrapper around Write-EndpointEvent.
+
+        Endpoint identity is included by default.
+        Use -NoEndpointIdentity to opt out.
+
+    .EXAMPLE
+        Write-EndpointWarn -Message "Disk space below threshold"
+    #>
+
     [CmdletBinding()]
     param(
         [string]$Message,
@@ -902,6 +558,7 @@ function Write-EndpointWarn {
         [string]$Source,
         [string]$CorrelationId,
         [switch]$IncludeEndpointIdentity,
+        [switch]$NoEndpointIdentity,
         [switch]$IncludeProcessInfo
     )
 
@@ -916,111 +573,28 @@ function Write-EndpointWarn {
         -Source $Source `
         -CorrelationId $CorrelationId `
         -IncludeEndpointIdentity:$IncludeEndpointIdentity `
+        -NoEndpointIdentity:$NoEndpointIdentity `
         -IncludeProcessInfo:$IncludeProcessInfo
 }
 
-<#
-.SYNOPSIS
-    Writes an ERROR-level endpoint event.
-
-.DESCRIPTION
-    Convenience wrapper around Write-EndpointEvent that writes with Level set to ERROR.
-
-    Can also accept a PowerShell ErrorRecord and flatten useful error details into
-    the JSON event.
-
-.PARAMETER Message
-    Human-readable error message.
-
-.PARAMETER Data
-    Optional structured data to merge into the JSON event.
-
-.PARAMETER Path
-    Explicit path to the NDJSON log file.
-
-.PARAMETER Name
-    Base log filename when Path is not specified.
-
-.PARAMETER LogRoot
-    Directory where logs are written when Path is not specified.
-
-.PARAMETER EventName
-    Optional event name.
-
-.PARAMETER Source
-    Optional source name.
-
-.PARAMETER CorrelationId
-    Optional shared ID used to group related events.
-
-.PARAMETER IncludeEndpointIdentity
-    Adds endpoint identity fields.
-
-.PARAMETER IncludeProcessInfo
-    Adds process execution fields.
-
-.PARAMETER ErrorRecord
-    PowerShell error record, usually passed from a catch block using $_.
-
-.EXAMPLE
-    Write-EndpointError -Message "Upload failed"
-
-    Writes a simple ERROR event.
-
-.EXAMPLE
-    try {
-        Get-Item "C:\Does\Not\Exist" -ErrorAction Stop
-    }
-    catch {
-        Write-EndpointError `
-            -Source "FileCheck" `
-            -EventName "PathAccessFailed" `
-            -Message "Failed to access path" `
-            -ErrorRecord $_ `
-            -Data @{
-                Path = "C:\Does\Not\Exist"
-            } `
-            -IncludeEndpointIdentity
-    }
-
-    Writes an ERROR event with exception details from a catch block.
-
-.EXAMPLE
-    Write-EndpointError `
-        -Source "BlobUploader" `
-        -EventName "UploadFailed" `
-        -Message "Blob upload failed" `
-        -Data @{
-            BlobName   = "endpoint-events.ndjson"
-            StatusCode = 403
-            Reason     = "SAS token expired"
-        }
-
-    Writes a structured ERROR event.
-
-.EXAMPLE
-    $correlationId = "20260619-ROOM-B12-BASELINE"
-
-    Write-EndpointError `
-        -Source "ClassroomBaseline" `
-        -EventName "BaselineFailed" `
-        -Message "Endpoint failed classroom baseline validation" `
-        -CorrelationId $correlationId `
-        -IncludeEndpointIdentity `
-        -Data @{
-            Room        = "B12"
-            AssetTag    = "C001HT"
-            FailedCheck = "RequiredApplication"
-            Application = "Exam Browser"
-            Status      = "Failed"
-        }
-
-    Writes a correlated baseline failure event.
-
-.OUTPUTS
-    System.String
-#>
 function Write-EndpointError {
+    <#
+    .SYNOPSIS
+        Writes an ERROR-level endpoint event.
+
+    .DESCRIPTION
+        Convenience wrapper around Write-EndpointEvent.
+
+        Can accept a PowerShell ErrorRecord and flatten useful error details into
+        the JSON event.
+
+        Endpoint identity is included by default.
+        Use -NoEndpointIdentity to opt out.
+
+    .EXAMPLE
+        Write-EndpointError -Message "Upload failed"
+    #>
+
     [CmdletBinding()]
     param(
         [string]$Message,
@@ -1032,6 +606,7 @@ function Write-EndpointError {
         [string]$Source,
         [string]$CorrelationId,
         [switch]$IncludeEndpointIdentity,
+        [switch]$NoEndpointIdentity,
         [switch]$IncludeProcessInfo,
         [System.Management.Automation.ErrorRecord]$ErrorRecord
     )
@@ -1065,6 +640,7 @@ function Write-EndpointError {
         -Source $Source `
         -CorrelationId $CorrelationId `
         -IncludeEndpointIdentity:$IncludeEndpointIdentity `
+        -NoEndpointIdentity:$NoEndpointIdentity `
         -IncludeProcessInfo:$IncludeProcessInfo
 }
 

@@ -1,6 +1,6 @@
 @{
     RootModule        = 'OpenEndpointEvents.psm1'
-    ModuleVersion     = '1.2.0.1'
+    ModuleVersion     = '1.2.1'
     GUID              = '7f98bb9c-3c6a-4b65-9871-7e8e7f0a9d41'
     Author            = 'OpenEndpointEvents contributors'
     CompanyName       = 'OpenEndpointEvents'
@@ -45,7 +45,7 @@
 
             ProjectUri   = 'https://github.com/Flock-Master/OpenEndpointEvents'
             LicenseUri   = 'https://github.com/Flock-Master/OpenEndpointEvents/blob/main/LICENSE'
-            ReleaseNotes = 'Seperates the Uploader from the stable Event Logger'
+            ReleaseNotes = 'v1.2.0 includes endpoint identity by default on all events and adds -NoEndpointIdentity to opt out.'
         }
     }
 }

@@ -1,55 +1,14 @@
 <#
 .SYNOPSIS
-    Functional test script for the OpenEndpointEvents PowerShell module.
+    Functional test script for OpenEndpointEvents.
 
 .DESCRIPTION
-    Tests the main OpenEndpointEvents module functions and options:
-    - Module import
-    - Exported commands
-    - Safe filename conversion
-    - Event level normalization
-    - Structured data conversion
-    - Endpoint identity collection
-    - Log path generation
-    - Generic event writing
-    - INFO/WARN/ERROR wrapper functions
-    - Structured hashtable data
-    - PSCustomObject data
-    - Simple value data
-    - Correlation IDs
-    - Endpoint identity enrichment
-    - Process info enrichment
-    - ErrorRecord flattening
-    - Collision handling for reserved field names
-    - NDJSON validity
-    - Multiple writes to one file
+    Tests core OpenEndpointEvents module functionality.
 
-.PARAMETER ModulePath
-    Optional explicit path to OpenEndpointEvents.psd1.
-
-    Example:
-    C:\Temp\repos\OpenEndpointEvents\src\OpenEndpointEvents\OpenEndpointEvents.psd1
-
-.PARAMETER TestRoot
-    Optional folder where test logs are written.
-
-.PARAMETER KeepTestFiles
-    Keeps the test output folder after completion.
-
-.EXAMPLE
-    .\tests\Test-OpenEndpointEvents.ps1
-
-    Tests the installed OpenEndpointEvents module.
-
-.EXAMPLE
-    .\tests\Test-OpenEndpointEvents.ps1 -ModulePath "C:\Temp\repos\OpenEndpointEvents\src\OpenEndpointEvents\OpenEndpointEvents.psd1"
-
-    Tests the module directly from a repo checkout.
-
-.EXAMPLE
-    .\tests\Test-OpenEndpointEvents.ps1 -KeepTestFiles
-
-    Runs tests and keeps generated test logs.
+    Updated for v1.2.0:
+    - Endpoint identity is included by default.
+    - -NoEndpointIdentity suppresses endpoint identity.
+    - DeviceId is present by default.
 #>
 
 [CmdletBinding()]
@@ -170,6 +129,11 @@ Invoke-Test -Name "Import module" -ScriptBlock {
     Write-Host "Imported module from: $($module.Path)" -ForegroundColor Cyan
 }
 
+Invoke-Test -Name "Module version is at least 1.2.0" -ScriptBlock {
+    $module = Get-Module OpenEndpointEvents
+    Assert-True -Condition ($module.Version -ge [version]"1.2.0") -Message "Expected OpenEndpointEvents 1.2.0 or later. Found $($module.Version)."
+}
+
 Invoke-Test -Name "Exported commands exist" -ScriptBlock {
     $expectedCommands = @(
         "ConvertTo-SafeFilePart",
@@ -238,14 +202,20 @@ Invoke-Test -Name "ConvertTo-EndpointEventData handles simple value" -ScriptBloc
 Invoke-Test -Name "Get-EndpointIdentity returns expected base properties" -ScriptBlock {
     $identity = Get-EndpointIdentity
 
-    Assert-True -Condition ($null -ne $identity.ComputerName) -Message "ComputerName missing."
-    Assert-True -Condition ($null -ne $identity.SerialNumber) -Message "SerialNumber missing."
-
     $properties = $identity.PSObject.Properties.Name
 
-    foreach ($property in @("ComputerName", "SerialNumber", "Manufacturer", "Model", "OSVersion", "OSBuild", "Domain")) {
+    foreach ($property in @("ComputerName", "SerialNumber", "DeviceId", "Manufacturer", "Model", "OSVersion", "OSBuild", "Domain")) {
         Assert-True -Condition ($properties -contains $property) -Message "Missing identity property: $property"
     }
+
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($identity.ComputerName)) -Message "ComputerName missing."
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($identity.SerialNumber)) -Message "SerialNumber missing."
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($identity.DeviceId)) -Message "DeviceId missing."
+}
+
+Invoke-Test -Name "Get-EndpointIdentity suppresses CIM verbose noise" -ScriptBlock {
+    $output = Get-EndpointIdentity -Verbose 4>&1 | Out-String
+    Assert-True -Condition ($output -notmatch "Enumerate CimInstances") -Message "CIM verbose noise was emitted."
 }
 
 Invoke-Test -Name "New-EndpointEventLogPath creates default path" -ScriptBlock {
@@ -282,6 +252,45 @@ Invoke-Test -Name "Write-EndpointEvent writes basic INFO event" -ScriptBlock {
 
     Assert-Equal -Actual $event.Level -Expected "INFO" -Message "Event level incorrect."
     Assert-Equal -Actual $event.Message -Expected "Basic generic INFO event" -Message "Event message incorrect."
+}
+
+Invoke-Test -Name "Default event includes endpoint identity" -ScriptBlock {
+    Write-EndpointInfo `
+        -Path $TestLogPath `
+        -Message "Default identity test" | Out-Null
+
+    $event = Read-Ndjson -Path $TestLogPath | Select-Object -Last 1
+
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($event.ComputerName)) -Message "ComputerName missing by default."
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($event.SerialNumber)) -Message "SerialNumber missing by default."
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($event.DeviceId)) -Message "DeviceId missing by default."
+}
+
+Invoke-Test -Name "NoEndpointIdentity suppresses endpoint identity" -ScriptBlock {
+    Write-EndpointInfo `
+        -Path $TestLogPath `
+        -Message "No identity test" `
+        -NoEndpointIdentity | Out-Null
+
+    $event = Read-Ndjson -Path $TestLogPath | Select-Object -Last 1
+    $properties = $event.PSObject.Properties.Name
+
+    Assert-True -Condition ($properties -notcontains "ComputerName") -Message "ComputerName should not exist when -NoEndpointIdentity is used."
+    Assert-True -Condition ($properties -notcontains "SerialNumber") -Message "SerialNumber should not exist when -NoEndpointIdentity is used."
+    Assert-True -Condition ($properties -notcontains "DeviceId") -Message "DeviceId should not exist when -NoEndpointIdentity is used."
+}
+
+Invoke-Test -Name "IncludeEndpointIdentity remains backward compatible" -ScriptBlock {
+    Write-EndpointInfo `
+        -Path $TestLogPath `
+        -Message "Backward compatibility identity test" `
+        -IncludeEndpointIdentity | Out-Null
+
+    $event = Read-Ndjson -Path $TestLogPath | Select-Object -Last 1
+
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($event.ComputerName)) -Message "ComputerName missing."
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($event.SerialNumber)) -Message "SerialNumber missing."
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($event.DeviceId)) -Message "DeviceId missing."
 }
 
 Invoke-Test -Name "Write-EndpointEvent writes structured hashtable data" -ScriptBlock {
@@ -367,19 +376,6 @@ Invoke-Test -Name "Write-EndpointEvent generates CorrelationId when omitted" -Sc
     Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($event.CorrelationId)) -Message "Generated CorrelationId missing."
 }
 
-Invoke-Test -Name "Write-EndpointEvent includes endpoint identity" -ScriptBlock {
-    Write-EndpointEvent `
-        -Path $TestLogPath `
-        -Level INFO `
-        -Message "Endpoint identity test" `
-        -IncludeEndpointIdentity | Out-Null
-
-    $event = Read-Ndjson -Path $TestLogPath | Select-Object -Last 1
-
-    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($event.ComputerName)) -Message "ComputerName missing."
-    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($event.SerialNumber)) -Message "SerialNumber missing."
-}
-
 Invoke-Test -Name "Write-EndpointEvent includes process info" -ScriptBlock {
     Write-EndpointEvent `
         -Path $TestLogPath `
@@ -402,6 +398,7 @@ Invoke-Test -Name "Write-EndpointEvent prefixes conflicting data fields" -Script
             Level     = "UserLevel"
             Message   = "UserMessage"
             Timestamp = "UserTimestamp"
+            DeviceId  = "UserDevice"
         } | Out-Null
 
     $event = Read-Ndjson -Path $TestLogPath | Select-Object -Last 1
@@ -411,6 +408,7 @@ Invoke-Test -Name "Write-EndpointEvent prefixes conflicting data fields" -Script
     Assert-Equal -Actual $event.Data_Level -Expected "UserLevel" -Message "Data_Level missing."
     Assert-Equal -Actual $event.Data_Message -Expected "UserMessage" -Message "Data_Message missing."
     Assert-Equal -Actual $event.Data_Timestamp -Expected "UserTimestamp" -Message "Data_Timestamp missing."
+    Assert-Equal -Actual $event.Data_DeviceId -Expected "UserDevice" -Message "Data_DeviceId missing."
 }
 
 Invoke-Test -Name "Write-EndpointInfo wrapper writes INFO" -ScriptBlock {
@@ -495,7 +493,7 @@ Invoke-Test -Name "Multiple writes produce multiple valid NDJSON lines" -ScriptB
     $lines = Get-Content -Path $SecondLogPath
     Assert-Equal -Actual $lines.Count -Expected 5 -Message "Unexpected NDJSON line count."
 
-    $events = Read-Ndjson -Path $SecondLogPath
+    $events = @(Read-Ndjson -Path $SecondLogPath)
     Assert-Equal -Actual $events.Count -Expected 5 -Message "Unexpected parsed event count."
     Assert-Equal -Actual ($events | Select-Object -Last 1).Sequence -Expected 5 -Message "Final sequence value incorrect."
 }
