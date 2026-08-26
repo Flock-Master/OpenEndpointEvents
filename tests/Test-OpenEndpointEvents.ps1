@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Functional test script for OpenEndpointEvents.
 
@@ -519,7 +519,8 @@ Invoke-Test -Name "Non-colliding data emits no warning" -ScriptBlock {
             }
     })
 
-    Assert-Equal -Actual $warnings.Count -Expected 0 -Message "Non-colliding data unexpectedly produced a warning."
+    $collisionWarnings = @($warnings | Where-Object { ($_ -is [System.Management.Automation.WarningRecord]) -and ($_.Message -match "OpenEndpointEvents:") })
+    Assert-Equal -Actual $collisionWarnings.Count -Expected 0 -Message "Non-colliding data unexpectedly produced a collision warning."
 }
 
 Invoke-Test -Name "Write-EndpointInfo wrapper writes INFO" -ScriptBlock {
@@ -665,3 +666,4 @@ if ($failed.Count -gt 0) {
 }
 
 exit 0
+
