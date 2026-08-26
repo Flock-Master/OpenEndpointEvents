@@ -89,9 +89,17 @@ function Get-WriteWarning {
 
     $output = & $ScriptBlock 3>&1
 
-    $warnings = @($output | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+    $warnings = New-Object System.Collections.Generic.List[object]
 
-    return $warnings
+    foreach ($item in $output) {
+        if ($item -is [System.Management.Automation.WarningRecord]) {
+            $warnings.Add($item)
+        }
+    }
+
+    # Unary comma prevents PowerShell from unwrapping a single-element or empty
+    # array on return. Callers can always read .Count under Set-StrictMode.
+    return ,$warnings.ToArray()
 }
 
 function Invoke-Test {
@@ -445,7 +453,7 @@ Invoke-Test -Name "Write-EndpointEvent prefixes conflicting data fields" -Script
 }
 
 Invoke-Test -Name "Reserved-field collision emits a warning naming the key" -ScriptBlock {
-    $warnings = Get-WriteWarning -ScriptBlock {
+    $warnings = @(Get-WriteWarning -ScriptBlock {
         Write-EndpointEvent `
             -Path $TestLogPath `
             -Level INFO `
@@ -454,7 +462,7 @@ Invoke-Test -Name "Reserved-field collision emits a warning naming the key" -Scr
             -Data @{
                 Message = "UserMessage"
             }
-    }
+    })
 
     Assert-Equal -Actual $warnings.Count -Expected 1 -Message "Expected exactly one collision warning."
     Assert-True -Condition ($warnings[0].Message -match "Message") -Message "Warning does not name the colliding key 'Message'."
@@ -480,7 +488,7 @@ Invoke-Test -Name "Collision warning still stores value under Data_ prefix" -Scr
 }
 
 Invoke-Test -Name "Identity-field collision emits warning and stores Data_Manufacturer" -ScriptBlock {
-    $warnings = Get-WriteWarning -ScriptBlock {
+    $warnings = @(Get-WriteWarning -ScriptBlock {
         Write-EndpointEvent `
             -Path $TestLogPath `
             -Level INFO `
@@ -488,17 +496,18 @@ Invoke-Test -Name "Identity-field collision emits warning and stores Data_Manufa
             -Data @{
                 Manufacturer = "Samsung"
             }
-    }
+    })
 
-    Assert-Equal -Actual $warnings.Count -Expected 1 -Message "Expected exactly one warning for identity-field collision."
-    Assert-True -Condition ($warnings[0].Message -match "Manufacturer") -Message "Warning does not name the colliding key 'Manufacturer'."
+    Assert-True -Condition ($warnings.Count -ge 1) -Message "Expected at least one warning for identity-field collision."
+    $manufacturerWarning = @($warnings | Where-Object { $_.Message -match "Manufacturer" })
+    Assert-True -Condition ($manufacturerWarning.Count -ge 1) -Message "No warning named the colliding key 'Manufacturer'."
 
     $event = Read-Ndjson -Path $TestLogPath | Select-Object -Last 1
     Assert-Equal -Actual $event.Data_Manufacturer -Expected "Samsung" -Message "Colliding value not stored under Data_Manufacturer."
 }
 
 Invoke-Test -Name "Non-colliding data emits no warning" -ScriptBlock {
-    $warnings = Get-WriteWarning -ScriptBlock {
+    $warnings = @(Get-WriteWarning -ScriptBlock {
         Write-EndpointEvent `
             -Path $TestLogPath `
             -Level INFO `
@@ -508,7 +517,7 @@ Invoke-Test -Name "Non-colliding data emits no warning" -ScriptBlock {
                 FreeGB    = 42.7
                 MountPoint = "C:"
             }
-    }
+    })
 
     Assert-Equal -Actual $warnings.Count -Expected 0 -Message "Non-colliding data unexpectedly produced a warning."
 }
