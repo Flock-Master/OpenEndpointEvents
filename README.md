@@ -565,7 +565,7 @@ Current focus:
 
 ```text
 OpenEndpointEvents = stable local endpoint event logging
-OpenEndpointEvents.Uploader = separate upload companion module
+OpenEndpointEvents.Uploader = separate upload companion module under development.
 ```
 
 The core logger is intended to remain small and stable.
