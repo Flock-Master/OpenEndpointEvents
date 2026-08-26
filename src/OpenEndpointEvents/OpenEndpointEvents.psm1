@@ -358,6 +358,11 @@ function Write-EndpointEvent {
         In v1.2.0, endpoint identity is included by default.
         Use -NoEndpointIdentity to opt out.
 
+        When a -Data key collides with a reserved event field (base fields,
+        identity fields, or process-info fields), the value is stored under a
+        Data_<key> prefix and a warning is emitted. Suppress the warning with
+        -WarningAction SilentlyContinue.
+
     .PARAMETER NoEndpointIdentity
         Prevents ComputerName, SerialNumber, DeviceId, Manufacturer, Model, OSVersion,
         OSBuild, and Domain from being added to the event.
@@ -453,6 +458,7 @@ function Write-EndpointEvent {
 
     foreach ($key in $structuredData.Keys) {
         if ($entry.Contains($key)) {
+            Write-Warning ("OpenEndpointEvents: -Data key '{0}' collides with a reserved event field and was stored as 'Data_{0}'. Rename the key in -Data to avoid silent relocation." -f $key)
             $entry["Data_$key"] = $structuredData[$key]
         }
         else {

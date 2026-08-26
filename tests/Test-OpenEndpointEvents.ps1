@@ -9,6 +9,11 @@
     - Endpoint identity is included by default.
     - -NoEndpointIdentity suppresses endpoint identity.
     - DeviceId is present by default.
+
+    Updated for reserved-field collision warning:
+    - Write-EndpointEvent emits a warning when a -Data key collides with a
+      reserved event field. The colliding value is still stored under the
+      Data_<key> prefix (unchanged behavior).
 #>
 
 [CmdletBinding()]
@@ -60,6 +65,33 @@ function Assert-Equal {
     if ($Actual -ne $Expected) {
         throw "$Message Actual='$Actual' Expected='$Expected'"
     }
+}
+
+function Get-WriteWarning {
+    <#
+    .SYNOPSIS
+        Invokes a scriptblock and returns any warnings it emits.
+
+    .DESCRIPTION
+        Redirects the warning stream (3) into the success stream and returns only
+        WarningRecord objects. Any non-warning output from the scriptblock is
+        discarded. The returned value is always an array (possibly empty) so callers
+        can safely read .Count under Set-StrictMode.
+
+    .PARAMETER ScriptBlock
+        The scriptblock to invoke.
+    #>
+
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ScriptBlock
+    )
+
+    $output = & $ScriptBlock 3>&1
+
+    $warnings = @($output | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+
+    return $warnings
 }
 
 function Invoke-Test {
@@ -399,7 +431,8 @@ Invoke-Test -Name "Write-EndpointEvent prefixes conflicting data fields" -Script
             Message   = "UserMessage"
             Timestamp = "UserTimestamp"
             DeviceId  = "UserDevice"
-        } | Out-Null
+        } `
+        -WarningAction SilentlyContinue | Out-Null
 
     $event = Read-Ndjson -Path $TestLogPath | Select-Object -Last 1
 
@@ -409,6 +442,75 @@ Invoke-Test -Name "Write-EndpointEvent prefixes conflicting data fields" -Script
     Assert-Equal -Actual $event.Data_Message -Expected "UserMessage" -Message "Data_Message missing."
     Assert-Equal -Actual $event.Data_Timestamp -Expected "UserTimestamp" -Message "Data_Timestamp missing."
     Assert-Equal -Actual $event.Data_DeviceId -Expected "UserDevice" -Message "Data_DeviceId missing."
+}
+
+Invoke-Test -Name "Reserved-field collision emits a warning naming the key" -ScriptBlock {
+    $warnings = Get-WriteWarning -ScriptBlock {
+        Write-EndpointEvent `
+            -Path $TestLogPath `
+            -Level INFO `
+            -Message "Collision warning test" `
+            -NoEndpointIdentity `
+            -Data @{
+                Message = "UserMessage"
+            }
+    }
+
+    Assert-Equal -Actual $warnings.Count -Expected 1 -Message "Expected exactly one collision warning."
+    Assert-True -Condition ($warnings[0].Message -match "Message") -Message "Warning does not name the colliding key 'Message'."
+    Assert-True -Condition ($warnings[0].Message -match "Data_Message") -Message "Warning does not state the Data_ target name."
+    Assert-True -Condition ($warnings[0].Message -match "OpenEndpointEvents") -Message "Warning is not namespaced with 'OpenEndpointEvents'."
+}
+
+Invoke-Test -Name "Collision warning still stores value under Data_ prefix" -ScriptBlock {
+    Write-EndpointEvent `
+        -Path $TestLogPath `
+        -Level INFO `
+        -Message "Collision warning storage test" `
+        -NoEndpointIdentity `
+        -Data @{
+            Message = "UserMessage"
+        } `
+        -WarningAction SilentlyContinue | Out-Null
+
+    $event = Read-Ndjson -Path $TestLogPath | Select-Object -Last 1
+
+    Assert-Equal -Actual $event.Message -Expected "Collision warning storage test" -Message "Base Message was overwritten."
+    Assert-Equal -Actual $event.Data_Message -Expected "UserMessage" -Message "Colliding value not stored under Data_Message."
+}
+
+Invoke-Test -Name "Identity-field collision emits warning and stores Data_Manufacturer" -ScriptBlock {
+    $warnings = Get-WriteWarning -ScriptBlock {
+        Write-EndpointEvent `
+            -Path $TestLogPath `
+            -Level INFO `
+            -Message "Identity collision test" `
+            -Data @{
+                Manufacturer = "Samsung"
+            }
+    }
+
+    Assert-Equal -Actual $warnings.Count -Expected 1 -Message "Expected exactly one warning for identity-field collision."
+    Assert-True -Condition ($warnings[0].Message -match "Manufacturer") -Message "Warning does not name the colliding key 'Manufacturer'."
+
+    $event = Read-Ndjson -Path $TestLogPath | Select-Object -Last 1
+    Assert-Equal -Actual $event.Data_Manufacturer -Expected "Samsung" -Message "Colliding value not stored under Data_Manufacturer."
+}
+
+Invoke-Test -Name "Non-colliding data emits no warning" -ScriptBlock {
+    $warnings = Get-WriteWarning -ScriptBlock {
+        Write-EndpointEvent `
+            -Path $TestLogPath `
+            -Level INFO `
+            -Message "No collision test" `
+            -NoEndpointIdentity `
+            -Data @{
+                FreeGB    = 42.7
+                MountPoint = "C:"
+            }
+    }
+
+    Assert-Equal -Actual $warnings.Count -Expected 0 -Message "Non-colliding data unexpectedly produced a warning."
 }
 
 Invoke-Test -Name "Write-EndpointInfo wrapper writes INFO" -ScriptBlock {
